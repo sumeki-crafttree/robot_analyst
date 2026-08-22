@@ -1,0 +1,1138 @@
+schema_name: "semiconductor_macro_event_extraction_output"
+schema_version: "1.0.0"
+status: "design_complete"
+owner: "data-pipeline"
+component: "semiconductor_macro_event_extraction"
+source:
+  output_root_dir: "data/processed/tdnet_semiconductor_macro_events_extracted/"
+  description: "Evidence-grounded semiconductor macro events extracted from generic TDnet evidence."
+
+common_versions:
+  schema_version:
+    expected_value: "1.0.0"
+    semantics: "Semantic version of this output contract."
+  extraction_version:
+    format: "YYYY-MM-DD.NNN"
+    semantics: "Version of extraction logic, prompt, normalization, and thresholds."
+  taxonomy_version:
+    expected_value: "1.0.0"
+    format: "SemVer"
+    semantics: "Version of taxonomy labels and parent-child mappings."
+
+null_and_other_semantics:
+  null: "The source does not state the value, or the field is not applicable."
+  other: "The source explicitly states a value that is outside the maintained taxonomy."
+  raw_value_rule: "When a normalized taxonomy field is other, preserve the explicit source wording in its corresponding raw field when one exists."
+
+enums:
+  extraction_status:
+    - "success"
+    - "no_event_found"
+    - "needs_review"
+    - "failed_validation"
+  summary_status:
+    - "success"
+    - "no_event_found"
+    - "needs_review"
+    - "failed_validation"
+    - "failed"
+    - "skipped"
+    - "review_only"
+    - "failed_precheck"
+  review_item_type:
+    - "document"
+    - "event"
+  document_type:
+    - "earnings_release"
+    - "earnings_presentation"
+    - "forecast_revision"
+    - "operating_update"
+    - "business_plan"
+    - "dividend_shareholder_return"
+    - "financing_capital_policy"
+    - "ma_restructuring"
+    - "business_alliance"
+    - "capex_fixed_assets"
+    - "impairment"
+    - "legal_regulatory"
+    - "governance_personnel"
+    - "sustainability"
+    - "other"
+  macro_theme_l1:
+    - "end_market_demand"
+    - "ai_datacenter_capex"
+    - "semiconductor_cycle"
+    - "memory_pricing"
+    - "inventory"
+    - "customer_capex"
+    - "capacity_supply"
+    - "technology_transition"
+    - "fx"
+    - "input_cost"
+    - "geopolitics_export_control"
+    - "industrial_policy_subsidy"
+    - "logistics_supply_chain"
+    - "financial_conditions"
+  macro_theme_l2_by_l1:
+    end_market_demand:
+      - "ai_server_demand"
+      - "hyperscaler_demand"
+      - "pc_smartphone_demand"
+      - "automotive_ev_demand"
+      - "industrial_demand"
+      - "consumer_electronics_demand"
+      - "telecom_demand"
+      - "other_end_market_demand"
+    ai_datacenter_capex:
+      - "ai_server_investment"
+      - "hyperscaler_capex"
+      - "datacenter_capex"
+      - "ai_accelerator_investment"
+      - "datacenter_power_infrastructure"
+      - "other_ai_datacenter_capex"
+    semiconductor_cycle:
+      - "cycle_upturn"
+      - "cycle_downturn"
+      - "demand_recovery"
+      - "demand_slowdown"
+      - "supply_demand_balance"
+      - "other_semiconductor_cycle"
+    memory_pricing:
+      - "dram_pricing"
+      - "nand_pricing"
+      - "hbm_pricing"
+      - "memory_contract_pricing"
+      - "memory_spot_pricing"
+      - "other_memory_pricing"
+    inventory:
+      - "inventory_build"
+      - "inventory_adjustment"
+      - "inventory_normalization"
+      - "channel_inventory"
+      - "customer_inventory"
+      - "other_inventory"
+    customer_capex:
+      - "foundry_capex"
+      - "memory_capex"
+      - "wfe_capex"
+      - "logic_capex"
+      - "other_customer_capex"
+    capacity_supply:
+      - "utilization"
+      - "new_fab"
+      - "capacity_expansion"
+      - "capacity_reduction"
+      - "supply_shortage"
+      - "oversupply"
+      - "other_capacity_supply"
+    technology_transition:
+      - "node_transition"
+      - "gaa"
+      - "advanced_packaging"
+      - "euv"
+      - "sic_gan"
+      - "hbm_transition"
+      - "other_technology_transition"
+    fx:
+      - "yen_appreciation"
+      - "yen_depreciation"
+      - "currency_translation"
+      - "transaction_fx"
+      - "other_fx"
+    input_cost:
+      - "energy_cost"
+      - "material_cost"
+      - "silicon_wafer_cost"
+      - "chemical_gas_cost"
+      - "labor_cost"
+      - "other_input_cost"
+    geopolitics_export_control:
+      - "export_control"
+      - "china_us_geopolitics"
+      - "tariff_trade_restriction"
+      - "economic_security"
+      - "regional_conflict"
+      - "other_geopolitics"
+    industrial_policy_subsidy:
+      - "semiconductor_subsidy"
+      - "tax_incentive"
+      - "domestic_fab_policy"
+      - "localization_policy"
+      - "other_industrial_policy"
+    logistics_supply_chain:
+      - "logistics_disruption"
+      - "lead_time_change"
+      - "supplier_disruption"
+      - "procurement_constraint"
+      - "supply_chain_normalization"
+      - "other_logistics_supply_chain"
+    financial_conditions:
+      - "interest_rate"
+      - "funding_cost"
+      - "credit_availability"
+      - "liquidity_conditions"
+      - "other_financial_conditions"
+  value_chain:
+    - "idm"
+    - "fabless"
+    - "foundry"
+    - "memory"
+    - "logic"
+    - "analog"
+    - "power_semiconductor"
+    - "semiconductor_equipment"
+    - "inspection_metrology"
+    - "semiconductor_materials"
+    - "silicon_wafer"
+    - "electronic_components"
+    - "osat_packaging_test"
+    - "semiconductor_distributor"
+    - "facility_infrastructure"
+    - "other"
+  device_category:
+    - "dram"
+    - "nand"
+    - "hbm"
+    - "logic"
+    - "mcu"
+    - "analog"
+    - "power"
+    - "sensor"
+    - "foundry_service"
+    - "equipment"
+    - "materials"
+    - "wafer"
+    - "packaging"
+    - "other"
+  end_market:
+    - "ai_server"
+    - "datacenter"
+    - "smartphone"
+    - "pc"
+    - "automotive"
+    - "industrial"
+    - "consumer_electronics"
+    - "telecom"
+    - "medical"
+    - "defense_aerospace"
+    - "other"
+  event_direction:
+    - "increase"
+    - "decrease"
+    - "improving"
+    - "deteriorating"
+    - "tightening"
+    - "easing"
+    - "stable"
+    - "mixed"
+    - "unclear"
+  impact_direction:
+    - "positive"
+    - "negative"
+    - "mixed"
+    - "neutral"
+    - "unclear"
+  impact_mechanism:
+    - "volume_up"
+    - "volume_down"
+    - "asp_up"
+    - "asp_down"
+    - "cost_up"
+    - "cost_down"
+    - "margin_up"
+    - "margin_down"
+    - "utilization_up"
+    - "utilization_down"
+    - "inventory_increase"
+    - "inventory_reduction"
+    - "capacity_expansion"
+    - "capacity_reduction"
+    - "order_increase"
+    - "order_decrease"
+    - "backlog_increase"
+    - "backlog_decrease"
+    - "supply_constraint"
+    - "technology_mix_improvement"
+    - "technology_obsolescence"
+    - "capex_increase"
+    - "capex_decrease"
+  financial_metric:
+    - "revenue"
+    - "operating_profit"
+    - "gross_margin"
+    - "net_income"
+    - "capex"
+    - "inventory"
+    - "inventory_days"
+    - "orders"
+    - "backlog"
+    - "shipments"
+    - "asp"
+    - "utilization_rate"
+    - "production_capacity"
+    - "wafer_starts"
+    - "book_to_bill"
+    - "free_cash_flow"
+  region:
+    - "japan"
+    - "north_america"
+    - "europe"
+    - "china"
+    - "taiwan"
+    - "south_korea"
+    - "asia_ex_china"
+    - "global"
+    - "other"
+  impact_strength:
+    - "high"
+    - "medium"
+    - "low"
+    - "unclear"
+  time_horizon:
+    - "immediate"
+    - "current_period"
+    - "next_period"
+    - "medium_term"
+    - "multiple"
+    - "unclear"
+  actual_or_forecast:
+    - "actual"
+    - "forecast"
+    - "both"
+    - "unclear"
+    - "not_applicable"
+  impact_scope:
+    - "company_wide"
+    - "segment"
+    - "product"
+    - "device"
+    - "end_market"
+    - "customer_group"
+    - "region"
+    - "multiple"
+  evidence_source_type:
+    - "block"
+    - "table"
+    - "mixed"
+  validation_status:
+    - "passed"
+    - "failed"
+  review_status:
+    - "pending"
+    - "in_review"
+    - "resolved"
+    - "dismissed"
+
+output_artifacts:
+  - artifact_name: "document_canonical_json"
+    format: "json"
+    encoding: "utf-8"
+    path_pattern: "{yyyymmdd}/documents/{document_id}/semiconductor_macro_event_extraction.json"
+    grain: "one_file_per_processed_document"
+    description: "Canonical document result with zero or more events. Runtime failures create no canonical file."
+  - artifact_name: "daily_event_jsonl"
+    format: "jsonl"
+    encoding: "utf-8"
+    path_pattern: "{yyyymmdd}/semiconductor_macro_events.jsonl"
+    grain: "one_row_per_event"
+    canonical_projection: true
+    projection_shape:
+      description: "Each line is a lossless envelope projected from one canonical document event; documents with no events produce zero lines."
+      schema_ref: "event_jsonl_envelope"
+      native_json_rule: "Arrays and objects remain native JSON values; they are not stringified inside JSONL."
+  - artifact_name: "daily_event_csv"
+    format: "csv"
+    encoding: "utf-8-sig"
+    path_pattern: "{yyyymmdd}/semiconductor_macro_events.csv"
+    grain: "one_row_per_event"
+    canonical_projection: true
+  - artifact_name: "daily_summary_csv"
+    format: "csv"
+    encoding: "utf-8-sig"
+    path_pattern: "{yyyymmdd}/semiconductor_macro_event_extraction_summary.csv"
+    grain: "one_row_per_input_document"
+  - artifact_name: "daily_failed_csv"
+    format: "csv"
+    encoding: "utf-8-sig"
+    path_pattern: "{yyyymmdd}/semiconductor_macro_event_extraction_failed.csv"
+    grain: "one_row_per_failure"
+  - artifact_name: "daily_review_queue_csv"
+    format: "csv"
+    encoding: "utf-8-sig"
+    path_pattern: "{yyyymmdd}/semiconductor_macro_event_review_queue.csv"
+    grain: "one_row_per_review_item"
+  - artifact_name: "daily_report_json"
+    format: "json"
+    encoding: "utf-8"
+    path_pattern: "{yyyymmdd}/daily_semiconductor_macro_event_extraction_report.json"
+    grain: "one_file_per_day"
+  - artifact_name: "all_event_jsonl"
+    format: "jsonl"
+    encoding: "utf-8"
+    path_pattern: "semiconductor_macro_events_all.jsonl"
+    grain: "one_row_per_event_in_run"
+    canonical_projection: true
+    projection_shape:
+      description: "Each line is a lossless envelope projected from one canonical document event; documents with no events produce zero lines."
+      schema_ref: "event_jsonl_envelope"
+      native_json_rule: "Arrays and objects remain native JSON values; they are not stringified inside JSONL."
+  - artifact_name: "all_event_csv"
+    format: "csv"
+    encoding: "utf-8-sig"
+    path_pattern: "semiconductor_macro_events_all.csv"
+    grain: "one_row_per_event_in_run"
+  - artifact_name: "all_summary_csv"
+    format: "csv"
+    encoding: "utf-8-sig"
+    path_pattern: "semiconductor_macro_event_extraction_summary_all.csv"
+    grain: "one_row_per_input_document_in_run"
+  - artifact_name: "all_failed_csv"
+    format: "csv"
+    encoding: "utf-8-sig"
+    path_pattern: "semiconductor_macro_event_extraction_failed_all.csv"
+    grain: "one_row_per_failure_in_run"
+  - artifact_name: "all_review_queue_csv"
+    format: "csv"
+    encoding: "utf-8-sig"
+    path_pattern: "semiconductor_macro_event_review_queue_all.csv"
+    grain: "one_row_per_review_item_in_run"
+  - artifact_name: "all_report_json"
+    format: "json"
+    encoding: "utf-8"
+    path_pattern: "semiconductor_macro_event_extraction_report_all.json"
+    grain: "one_file_per_run"
+
+canonical_document:
+  object_name: "semiconductor_macro_event_extraction"
+  primary_key: ["document_id"]
+  required_properties:
+    - "schema_version"
+    - "extraction_version"
+    - "taxonomy_version"
+    - "document_id"
+    - "source_metadata"
+    - "input_versions"
+    - "extraction_provenance"
+    - "extraction_status"
+    - "events"
+    - "warnings"
+    - "validation"
+    - "generated_at_utc"
+  properties:
+    schema_version: {logical_type: "string", nullable: false, expected_value: "1.0.0"}
+    extraction_version: {logical_type: "string", nullable: false}
+    taxonomy_version: {logical_type: "string", nullable: false, expected_value: "1.0.0"}
+    document_id: {logical_type: "string", nullable: false}
+    source_metadata:
+      logical_type: "json_object"
+      nullable: false
+      schema_ref: "source_metadata"
+    input_versions:
+      logical_type: "json_object"
+      nullable: false
+      schema_ref: "input_versions"
+    extraction_provenance:
+      logical_type: "json_object"
+      nullable: false
+      schema_ref: "extraction_provenance"
+    extraction_status:
+      logical_type: "enum"
+      nullable: false
+      enum_ref: "extraction_status"
+    events:
+      logical_type: "json_array"
+      nullable: false
+      item_schema_ref: "macro_event"
+    warnings:
+      logical_type: "json_array"
+      nullable: false
+      item_schema_ref: "warning"
+    validation:
+      logical_type: "json_object"
+      nullable: false
+      schema_ref: "validation_result"
+    generated_at_utc: {logical_type: "utc_datetime_string", nullable: false}
+
+objects:
+  event_jsonl_envelope:
+    required_properties:
+      - "schema_version"
+      - "extraction_version"
+      - "taxonomy_version"
+      - "document_id"
+      - "source_metadata"
+      - "extraction_status"
+      - "extraction_provenance"
+      - "event"
+      - "generated_at_utc"
+    properties:
+      schema_version: {logical_type: "string", nullable: false, expected_value: "1.0.0"}
+      extraction_version: {logical_type: "string", nullable: false}
+      taxonomy_version: {logical_type: "string", nullable: false, expected_value: "1.0.0"}
+      document_id: {logical_type: "string", nullable: false}
+      source_metadata: {logical_type: "json_object", nullable: false, schema_ref: "source_metadata"}
+      extraction_status: {logical_type: "enum", nullable: false, enum_ref: "extraction_status"}
+      extraction_provenance: {logical_type: "json_object", nullable: false, schema_ref: "extraction_provenance"}
+      event: {logical_type: "json_object", nullable: false, schema_ref: "macro_event"}
+      generated_at_utc: {logical_type: "utc_datetime_string", nullable: false}
+
+  source_metadata:
+    required_properties:
+      - "source_id"
+      - "disclosure_date"
+      - "disclosure_time"
+      - "issuer_code"
+      - "issuer_name"
+      - "title"
+      - "document_url"
+      - "document_type"
+      - "issuer_value_chains"
+      - "issuer_value_chain_raw"
+    properties:
+      source_id: {logical_type: "string", nullable: false}
+      disclosure_date: {logical_type: "date_string", nullable: false}
+      disclosure_time: {logical_type: "time_string", nullable: true}
+      issuer_code: {logical_type: "string", nullable: false}
+      issuer_name: {logical_type: "string", nullable: false}
+      title: {logical_type: "string", nullable: false}
+      document_url: {logical_type: "uri_string", nullable: false}
+      document_type: {logical_type: "enum", nullable: false, enum_ref: "document_type"}
+      issuer_value_chains:
+        logical_type: "enum_array"
+        nullable: true
+        item_enum_ref: "value_chain"
+        description: "Issuer-level classification from maintained configuration or explicit source evidence; never inferred by the LLM without such support."
+      issuer_value_chain_raw:
+        logical_type: "string_array"
+        nullable: true
+        description: "Raw issuer classification labels aligned with the configured or source-supported issuer classification."
+
+  input_versions:
+    required_properties:
+      - "preprocessing_contract_reference"
+      - "preprocessing_artifact_hashes"
+      - "generic_enrichment_schema_version"
+      - "generic_enrichment_version"
+    properties:
+      preprocessing_contract_reference:
+        logical_type: "string"
+        nullable: false
+        expected_prefix: "020_prop_candidates/notebook/tdnet_pdf_preprocessing.py"
+        description: "Code contract reference; append source revision or content hash when available."
+      preprocessing_artifact_hashes:
+        logical_type: "json_object"
+        nullable: false
+        description: "Map from consumed preprocessing artifact path or logical artifact name to its content hash."
+      generic_enrichment_schema_version: {logical_type: "string", nullable: false}
+      generic_enrichment_version: {logical_type: "string", nullable: false}
+
+  extraction_provenance:
+    required_properties:
+      - "llm_called"
+      - "provider"
+      - "model"
+      - "model_version"
+      - "prompt_version"
+      - "context_set_version"
+      - "temperature"
+      - "attempt_count"
+      - "fallback_used"
+      - "token_usage"
+      - "input_evidence_ids"
+      - "context_hashes"
+      - "latency_ms"
+      - "cost"
+    properties:
+      llm_called: {logical_type: "boolean", nullable: false}
+      provider: {logical_type: "string", nullable: true}
+      model: {logical_type: "string", nullable: true}
+      model_version: {logical_type: "string", nullable: true}
+      prompt_version: {logical_type: "string", nullable: false}
+      context_set_version: {logical_type: "string", nullable: false}
+      temperature: {logical_type: "float", nullable: true}
+      attempt_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      fallback_used: {logical_type: "boolean", nullable: false}
+      token_usage:
+        logical_type: "json_object"
+        nullable: true
+        properties:
+          input_tokens: {logical_type: "integer", nullable: true}
+          output_tokens: {logical_type: "integer", nullable: true}
+          total_tokens: {logical_type: "integer", nullable: true}
+      input_evidence_ids: {logical_type: "string_array", nullable: false}
+      context_hashes: {logical_type: "string_array", nullable: false}
+      latency_ms: {logical_type: "integer", nullable: true, constraints: {min_inclusive: 0}}
+      cost:
+        logical_type: "json_object"
+        nullable: true
+        properties:
+          amount: {logical_type: "decimal", nullable: false}
+          currency: {logical_type: "string", nullable: false}
+
+  macro_event:
+    grain: "one company x one disclosure x one macro_theme_l1/l2 x one business impact"
+    required_properties:
+      - "event_id"
+      - "dedup_key"
+      - "macro_theme_l1"
+      - "macro_theme_l2"
+      - "event_direction"
+      - "impact_direction"
+      - "impact_strength"
+      - "time_horizon"
+      - "actual_or_forecast"
+      - "impact_scope"
+      - "impact_mechanism"
+      - "normalized_summary"
+      - "financial_impacts"
+      - "evidence_refs"
+      - "confidence"
+      - "needs_human_review"
+      - "review_reasons"
+    properties:
+      event_id:
+        logical_type: "string"
+        nullable: false
+        generation: "evt_ + first 24 lowercase hex characters of SHA-256(document_id + U+001F + canonical_fingerprint)"
+      dedup_key:
+        logical_type: "string"
+        nullable: false
+        generation: "dedup_ + first 24 lowercase hex characters of SHA-256(canonical_dedup_fingerprint)"
+      macro_theme_l1: {logical_type: "enum", nullable: false, enum_ref: "macro_theme_l1"}
+      macro_theme_l2: {logical_type: "enum", nullable: false, enum_ref: "macro_theme_l2_by_l1"}
+      event_direction: {logical_type: "enum", nullable: false, enum_ref: "event_direction"}
+      impact_direction:
+        logical_type: "enum"
+        nullable: false
+        enum_ref: "impact_direction"
+        description: "Overall business effect of this event; distinct from each financial_impact.impact_direction."
+      impact_strength: {logical_type: "enum", nullable: false, enum_ref: "impact_strength"}
+      time_horizon: {logical_type: "enum", nullable: false, enum_ref: "time_horizon"}
+      actual_or_forecast: {logical_type: "enum", nullable: false, enum_ref: "actual_or_forecast"}
+      impact_scope: {logical_type: "enum", nullable: false, enum_ref: "impact_scope"}
+      impact_mechanism: {logical_type: "enum", nullable: false, enum_ref: "impact_mechanism"}
+      normalized_summary: {logical_type: "string", nullable: false}
+      semiconductor_value_chain:
+        logical_type: "enum"
+        nullable: true
+        enum_ref: "value_chain"
+        description: "Value-chain target of this event, separate from source_metadata.issuer_value_chains."
+      semiconductor_value_chain_raw:
+        logical_type: "string"
+        nullable: true
+        description: "Raw source wording for the event-level value-chain target; required when semiconductor_value_chain is other."
+      company_segment_raw: {logical_type: "string", nullable: true}
+      company_product_raw: {logical_type: "string", nullable: true}
+      normalized_segment: {logical_type: "string", nullable: true}
+      normalized_product_group: {logical_type: "string", nullable: true}
+      device_category: {logical_type: "enum", nullable: true, enum_ref: "device_category"}
+      device_category_raw:
+        logical_type: "string"
+        nullable: true
+        description: "Explicit source wording for device_category; required when device_category is other and normally null when device_category is null."
+      technology_node: {logical_type: "string", nullable: true}
+      end_market: {logical_type: "enum", nullable: true, enum_ref: "end_market"}
+      end_market_raw:
+        logical_type: "string"
+        nullable: true
+        description: "Explicit source wording for end_market; required when end_market is other and normally null when end_market is null."
+      customer_group: {logical_type: "string", nullable: true}
+      region: {logical_type: "enum", nullable: true, enum_ref: "region"}
+      region_raw: {logical_type: "string", nullable: true}
+      financial_impacts:
+        logical_type: "json_array"
+        nullable: false
+        default: []
+        item_schema_ref: "financial_impact"
+      evidence_refs:
+        logical_type: "json_array"
+        nullable: false
+        min_items: 1
+        max_items: 8
+        item_schema_ref: "evidence_ref"
+      confidence:
+        logical_type: "float"
+        nullable: false
+        constraints: {min_inclusive: 0.0, max_inclusive: 1.0}
+      needs_human_review: {logical_type: "boolean", nullable: false}
+      review_reasons: {logical_type: "string_array", nullable: false}
+
+  financial_impact:
+    required_properties:
+      - "financial_metric"
+      - "impact_direction"
+      - "amount_value"
+      - "amount_unit"
+      - "period"
+      - "actual_or_forecast"
+      - "offsetting_factor"
+    properties:
+      financial_metric: {logical_type: "enum", nullable: false, enum_ref: "financial_metric"}
+      impact_direction: {logical_type: "enum", nullable: false, enum_ref: "impact_direction"}
+      amount_value: {logical_type: "decimal", nullable: true}
+      amount_unit: {logical_type: "string", nullable: true}
+      period: {logical_type: "string", nullable: true}
+      actual_or_forecast: {logical_type: "enum", nullable: false, enum_ref: "actual_or_forecast"}
+      offsetting_factor: {logical_type: "string", nullable: true}
+
+  evidence_ref:
+    required_properties:
+      - "evidence_id"
+      - "source_type"
+      - "source_ids"
+      - "page_numbers"
+      - "quote"
+    properties:
+      evidence_id: {logical_type: "string", nullable: false}
+      source_type: {logical_type: "enum", nullable: false, enum_ref: "evidence_source_type"}
+      source_ids: {logical_type: "string_array", nullable: false, min_items: 1}
+      page_numbers: {logical_type: "integer_array", nullable: false, min_items: 1}
+      quote: {logical_type: "string", nullable: false, constraints: {min_length: 1, max_length: 2000}}
+
+  warning:
+    required_properties: ["code", "message"]
+    properties:
+      code: {logical_type: "string", nullable: false}
+      message: {logical_type: "string", nullable: false}
+      event_id: {logical_type: "string", nullable: true}
+
+  validation_error:
+    required_properties: ["code", "message", "json_path"]
+    properties:
+      code: {logical_type: "string", nullable: false}
+      message: {logical_type: "string", nullable: false}
+      json_path: {logical_type: "string", nullable: false}
+      event_id: {logical_type: "string", nullable: true}
+
+  validation_result:
+    required_properties: ["status", "errors", "checked_at_utc"]
+    properties:
+      status: {logical_type: "enum", nullable: false, enum_ref: "validation_status"}
+      errors: {logical_type: "json_array", nullable: false, item_schema_ref: "validation_error"}
+      checked_at_utc: {logical_type: "utc_datetime_string", nullable: false}
+
+  review_item:
+    required_properties:
+      - "run_id"
+      - "target_date"
+      - "review_item_id"
+      - "review_item_type"
+      - "document_id"
+      - "event_id"
+      - "review_status"
+      - "review_reasons"
+      - "confidence"
+      - "canonical_json_path"
+      - "created_at_utc"
+    properties:
+      run_id: {logical_type: "string", nullable: false}
+      target_date: {logical_type: "string_yyyymmdd", nullable: false}
+      review_item_id: {logical_type: "string", nullable: false}
+      review_item_type: {logical_type: "enum", nullable: false, enum_ref: "review_item_type"}
+      document_id: {logical_type: "string", nullable: false}
+      event_id:
+        logical_type: "string"
+        nullable: true
+        description: "Required key; null for document-level review_only items and non-null for event items."
+      review_status: {logical_type: "enum", nullable: false, enum_ref: "review_status"}
+      review_reasons: {logical_type: "string_array", nullable: false}
+      confidence: {logical_type: "float", nullable: true, constraints: {min_inclusive: 0.0, max_inclusive: 1.0}}
+      canonical_json_path:
+        logical_type: "path_string"
+        nullable: true
+        description: "May be null for routing-stage document reviews with no canonical output."
+      created_at_utc: {logical_type: "utc_datetime_string", nullable: false}
+      resolved_at_utc:
+        logical_type: "utc_datetime_string"
+        nullable: true
+        description: "Null while review_status is pending; populated when the review is resolved or dismissed."
+      reviewer:
+        logical_type: "string"
+        nullable: true
+        description: "Null while review_status is pending; identifies the reviewer after disposition."
+      resolution_note:
+        logical_type: "string"
+        nullable: true
+        description: "Null while review_status is pending; records the disposition rationale when available."
+
+  extraction_report:
+    required_properties:
+      - "run_id"
+      - "schema_version"
+      - "extraction_version"
+      - "taxonomy_version"
+      - "started_at_utc"
+      - "finished_at_utc"
+      - "input_document_count"
+      - "canonical_document_count"
+      - "processed_document_count"
+      - "success_document_count"
+      - "no_event_document_count"
+      - "needs_review_document_count"
+      - "failed_validation_document_count"
+      - "runtime_failed_document_count"
+      - "skipped_document_count"
+      - "review_only_document_count"
+      - "failed_precheck_document_count"
+      - "event_count"
+      - "review_item_count"
+      - "review_event_count"
+      - "status_counts"
+      - "macro_theme_l1_counts"
+      - "error_code_counts"
+      - "output_paths"
+    properties:
+      run_id: {logical_type: "string", nullable: false}
+      schema_version: {logical_type: "string", nullable: false, expected_value: "1.0.0"}
+      extraction_version: {logical_type: "string", nullable: false}
+      taxonomy_version: {logical_type: "string", nullable: false, expected_value: "1.0.0"}
+      started_at_utc: {logical_type: "utc_datetime_string", nullable: false}
+      finished_at_utc: {logical_type: "utc_datetime_string", nullable: false}
+      input_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      canonical_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      processed_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      success_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      no_event_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      needs_review_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      failed_validation_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      runtime_failed_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      skipped_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      review_only_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      failed_precheck_document_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      event_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      review_item_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      review_event_count: {logical_type: "integer", nullable: false, constraints: {min_inclusive: 0}}
+      status_counts: {logical_type: "json_object", nullable: false}
+      macro_theme_l1_counts: {logical_type: "json_object", nullable: false}
+      error_code_counts: {logical_type: "json_object", nullable: false}
+      output_paths: {logical_type: "json_object", nullable: false}
+
+tables:
+  event_projection:
+    table_name: "tdnet_semiconductor_macro_events"
+    source_artifact: "daily_event_csv, daily_event_jsonl, all_event_csv, or all_event_jsonl"
+    grain: "one_row_per_event"
+    primary_key: ["event_id"]
+    generation_rule: "Deterministic projection from canonical JSON only; extraction must not run separately."
+    column_order:
+      - "schema_version"
+      - "extraction_version"
+      - "taxonomy_version"
+      - "document_id"
+      - "source_id"
+      - "disclosure_date"
+      - "issuer_code"
+      - "issuer_name"
+      - "title"
+      - "document_url"
+      - "document_type"
+      - "event_id"
+      - "dedup_key"
+      - "macro_theme_l1"
+      - "macro_theme_l2"
+      - "event_direction"
+      - "impact_direction"
+      - "impact_strength"
+      - "time_horizon"
+      - "actual_or_forecast"
+      - "impact_scope"
+      - "impact_mechanism"
+      - "normalized_summary"
+      - "semiconductor_value_chain"
+      - "semiconductor_value_chain_raw"
+      - "company_segment_raw"
+      - "company_product_raw"
+      - "normalized_segment"
+      - "normalized_product_group"
+      - "device_category"
+      - "device_category_raw"
+      - "technology_node"
+      - "end_market"
+      - "end_market_raw"
+      - "customer_group"
+      - "region"
+      - "region_raw"
+      - "financial_impacts_json"
+      - "financial_metric"
+      - "financial_impact_direction"
+      - "amount_value"
+      - "amount_unit"
+      - "financial_period"
+      - "financial_actual_or_forecast"
+      - "offsetting_factor"
+      - "evidence_refs_json"
+      - "evidence_ids_json"
+      - "confidence"
+      - "needs_human_review"
+      - "review_reasons_json"
+      - "extraction_status"
+      - "provider"
+      - "model"
+      - "model_version"
+      - "prompt_version"
+      - "context_set_version"
+      - "generated_at_utc"
+    projection_rules:
+      financial_impacts_json: "Canonical compact JSON encoding of the complete financial_impacts array; [] when empty."
+      convenience_financial_columns: "Populate all seven convenience columns only when financial_impacts has exactly one item; otherwise all seven are null."
+      evidence_refs_json: "Canonical compact JSON encoding of complete evidence_refs."
+      evidence_ids_json: "Canonical compact JSON encoding of evidence_id values in evidence_refs order."
+      review_reasons_json: "Canonical compact JSON encoding; [] when empty."
+
+  summary:
+    table_name: "tdnet_semiconductor_macro_event_extraction_summary"
+    grain: "one_row_per_input_document"
+    primary_key: ["run_id", "source_id"]
+    column_order:
+      - "run_id"
+      - "target_date"
+      - "source_id"
+      - "document_id"
+      - "title"
+      - "status"
+      - "event_count"
+      - "review_event_count"
+      - "error_code"
+      - "error_message"
+      - "canonical_json_path"
+      - "processing_duration_ms"
+      - "schema_version"
+      - "extraction_version"
+      - "taxonomy_version"
+      - "generated_at_utc"
+
+  failed:
+    table_name: "tdnet_semiconductor_macro_event_extraction_failed"
+    grain: "one_row_per_failure"
+    primary_key: ["run_id", "source_id", "error_code"]
+    column_order:
+      - "run_id"
+      - "target_date"
+      - "source_id"
+      - "document_id"
+      - "title"
+      - "stage"
+      - "error_code"
+      - "error_message"
+      - "retryable"
+      - "canonical_json_path"
+      - "schema_version"
+      - "extraction_version"
+      - "taxonomy_version"
+      - "generated_at_utc"
+
+  review_queue:
+    table_name: "tdnet_semiconductor_macro_event_review_queue"
+    grain: "one_row_per_review_item"
+    primary_key: ["review_item_id"]
+    column_order:
+      - "run_id"
+      - "target_date"
+      - "review_item_id"
+      - "review_item_type"
+      - "document_id"
+      - "event_id"
+      - "source_id"
+      - "issuer_code"
+      - "issuer_name"
+      - "title"
+      - "macro_theme_l1"
+      - "macro_theme_l2"
+      - "confidence"
+      - "review_reasons_json"
+      - "evidence_refs_json"
+      - "review_status"
+      - "canonical_json_path"
+      - "created_at_utc"
+      - "resolved_at_utc"
+      - "reviewer"
+      - "resolution_note"
+
+csv_serialization:
+  delimiter: ","
+  quote_character: "\""
+  line_ending: "LF"
+  header_required: true
+  null_encoding: ""
+  empty_string_encoding: "\"\""
+  boolean_encoding: ["true", "false"]
+  array_object_encoding: "RFC 8259 compact JSON, UTF-8, object keys in schema order, no insignificant whitespace."
+  empty_array_encoding: "[]"
+  numeric_encoding: "Base-10 JSON number without thousands separators; preserve declared decimal value."
+  datetime_encoding: "RFC 3339 UTC with trailing Z."
+  ordering: "Rows sorted by document_id ascending, then event_id ascending; summary by source_id; failed by source_id and error_code; review queue by document_id and event_id."
+
+deterministic_identity:
+  canonical_fingerprint_fields:
+    - "macro_theme_l1"
+    - "macro_theme_l2"
+    - "event_direction"
+    - "impact_direction"
+    - "time_horizon"
+    - "actual_or_forecast"
+    - "impact_scope"
+    - "impact_mechanism"
+    - "semiconductor_value_chain"
+    - "company_segment_raw"
+    - "company_product_raw"
+    - "normalized_segment"
+    - "normalized_product_group"
+    - "device_category"
+    - "technology_node"
+    - "end_market"
+    - "customer_group"
+    - "region"
+    - "financial_impacts"
+  canonical_dedup_fingerprint_fields:
+    - "issuer_code"
+    - "macro_theme_l1"
+    - "macro_theme_l2"
+    - "event_direction"
+    - "impact_scope"
+    - "impact_mechanism"
+    - "normalized_segment"
+    - "normalized_product_group"
+    - "device_category"
+    - "end_market"
+    - "customer_group"
+    - "region"
+    - "time_horizon"
+    - "actual_or_forecast"
+  canonical_fingerprint_excluded_fields:
+    - "impact_strength"
+    - "normalized_summary"
+    - "evidence_refs"
+    - "confidence"
+  impact_strength_identity_rule: "impact_strength is a quality/review attribute intentionally excluded from the canonical fingerprint; reassessing only this label must not change event_id."
+  normalization: "NFKC strings; trim; collapse Unicode whitespace; lowercase taxonomy values; null literal; arrays sorted by each object's canonical JSON except evidence_refs sorted by evidence_id; compact JSON with schema-ordered keys."
+  collision_rule: "A hash collision is a validation error; never append extraction-order suffixes."
+
+review_policy:
+  confidence_threshold: 0.70
+  require_review_if:
+    - "confidence < 0.70"
+    - "event_direction == unclear"
+    - "impact_strength == unclear"
+    - "actual_or_forecast == unclear"
+    - "target scope is evidence-supported but remains ambiguous between two accepted normalizations"
+    - "validation warning is configured as reviewable"
+  rejection_rule: "Unresolved evidence and unsupported entities, numbers, directions, targets, or causality are validation errors; the candidate must not become an accepted event or be downgraded to review-only."
+  document_review_rule: "Routing-stage document concerns such as low text quality may create a review_item_type=document row with event_id=null and no canonical JSON."
+  consistency_rule: "For event items, needs_human_review is true if and only if review_reasons is non-empty, and every such event creates one review_item_type=event queue row."
+
+error_codes:
+  runtime:
+    - "input_not_found"
+    - "invalid_input_json"
+    - "input_version_mismatch"
+    - "empty_generic_evidence"
+    - "provider_error"
+    - "model_timeout"
+    - "model_response_invalid"
+    - "retry_exhausted"
+    - "unexpected_error"
+  validation:
+    - "schema_validation_failed"
+    - "taxonomy_parent_mismatch"
+    - "evidence_unresolved"
+    - "quote_not_found"
+    - "page_source_mismatch"
+    - "unsupported_entity"
+    - "unsupported_number"
+    - "unsupported_causality"
+    - "event_formation_incomplete"
+    - "amount_unit_pair_invalid"
+    - "identity_collision"
+    - "count_reconciliation_failed"
+
+validation_rules:
+  - id: "version_exact_match"
+    severity: "error"
+    rule: "Every output row/object uses schema_version 1.0.0, taxonomy_version 1.0.0, and a non-empty YYYY-MM-DD.NNN extraction_version matching the run report."
+  - id: "input_contract_traceability"
+    severity: "error"
+    rule: "input_versions uses preprocessing_contract_reference beginning with 020_prop_candidates/notebook/tdnet_pdf_preprocessing.py, non-empty preprocessing_artifact_hashes, and both generic enrichment versions; preprocessing_schema_version is not allowed."
+  - id: "issuer_classification_grounding"
+    severity: "error"
+    rule: "issuer_value_chains and issuer_value_chain_raw may only come from maintained issuer configuration or explicit source evidence; the LLM must not infer or complete issuer classification without that support."
+  - id: "llm_provenance_consistency"
+    severity: "error"
+    rule: "If llm_called=false then provider, model, model_version, temperature, token_usage, and cost are null and attempt_count=0; if llm_called=true then provider, model, prompt_version, context_set_version, and temperature are non-null and attempt_count>=1."
+  - id: "l1_l2_parent_match"
+    severity: "error"
+    rule: "macro_theme_l2 must be a member of macro_theme_l2_by_l1[macro_theme_l1]."
+  - id: "event_identity_deterministic"
+    severity: "error"
+    rule: "event_id must equal the deterministic hash rule and remain unchanged when extraction order, normalized_summary wording, evidence_refs enumeration, or only impact_strength is reassessed; canonical financial_impacts remains part of the fingerprint."
+  - id: "dedup_identity_separate"
+    severity: "error"
+    rule: "dedup_key uses the cross-document canonical_dedup_fingerprint and must not be substituted for event_id."
+  - id: "event_grain_unique"
+    severity: "error"
+    rule: "Within one document, do not emit duplicate events for the same L1/L2 and business impact; multiple financial metrics remain in one event."
+  - id: "event_formation"
+    severity: "error"
+    rule: "Every event has event_direction, business impact_direction, a target scope including company_wide when applicable, an impact mechanism, and at least one resolving evidence_ref."
+  - id: "target_evidence"
+    severity: "error"
+    rule: "Nullable target fields may all be null only for impact_scope company_wide; otherwise evidence must support the selected scope and at least one corresponding target field."
+  - id: "normalized_raw_pair"
+    severity: "error"
+    rule: "If semiconductor_value_chain=other then semiconductor_value_chain_raw must be non-null; if device_category=other then device_category_raw must be non-null; if end_market=other then end_market_raw must be non-null; if region=other then region_raw must be non-null. When device_category or end_market is null, its corresponding raw field is normally null."
+  - id: "evidence_nonempty"
+    severity: "error"
+    rule: "evidence_refs has 1 to 8 items and every quote is non-empty."
+  - id: "evidence_resolution"
+    severity: "error"
+    rule: "Every evidence_id and source_id resolves within the input generic evidence set for the same document."
+  - id: "quote_normalized_substring"
+    severity: "error"
+    rule: "After NFKC, line-ending normalization, and whitespace collapse, quote is an exact substring of the resolved input evidence text."
+  - id: "evidence_page_source_match"
+    severity: "error"
+    rule: "source_type, source_ids, and page_numbers exactly agree with the resolved generic evidence metadata."
+  - id: "grounded_claims"
+    severity: "error"
+    rule: "No entity, number, period, direction, target, or causal relationship may be emitted unless supported by evidence_refs."
+  - id: "amount_value_unit_pair"
+    severity: "error"
+    rule: "amount_value and amount_unit are either both null or both non-null."
+  - id: "confidence_range"
+    severity: "error"
+    rule: "Every event confidence is between 0.0 and 1.0 inclusive."
+  - id: "review_threshold"
+    severity: "error"
+    rule: "Review policy, needs_human_review, review_reasons, event review rows, and document-level review_only rows are mutually consistent; validation errors never become accepted review events."
+  - id: "status_event_count"
+    severity: "error"
+    rule: "no_event_found requires events=[]; success requires one or more events and no review event; needs_review requires an accepted review event or a document/chunk-level warning and review reason, and may have zero or more accepted events; failed_validation requires validation errors."
+  - id: "partial_chunk_behavior"
+    severity: "error"
+    rule: "partial is not an extraction_status; a chunk-level partial failure uses needs_review with a warning and review reason, preserving only accepted events from successfully validated chunks."
+  - id: "summary_totality"
+    severity: "error"
+    rule: "Every routed input creates exactly one summary row, including inputs with skipped, review_only, failed_precheck, failed, and canonical extraction statuses; skipped, review_only, and failed_precheck may have no canonical JSON."
+  - id: "runtime_failure_behavior"
+    severity: "error"
+    rule: "Runtime failures create no canonical JSON and no main event rows; they create exactly one summary failed row and at least one failed row."
+  - id: "canonical_projection"
+    severity: "error"
+    rule: "JSONL and CSV event rows are deterministic projections of the same canonical events without re-running extraction; each JSONL line is the declared lossless envelope with native arrays/objects, one line per event and zero lines for documents without events, while CSV is its flat projection."
+  - id: "lossless_financial_projection"
+    severity: "error"
+    rule: "financial_impacts_json reconstructs canonical financial_impacts exactly; convenience columns are populated only for exactly one item and are all null otherwise."
+  - id: "csv_json_fields"
+    severity: "error"
+    rule: "All array/object CSV fields use csv_serialization.array_object_encoding; null is empty, empty arrays are [], and literal empty strings are quoted."
+  - id: "csv_column_order"
+    severity: "error"
+    rule: "Every CSV header exactly follows its table column_order."
+  - id: "error_object_integrity"
+    severity: "error"
+    rule: "Each failed row has a declared error_code, stage, retryable flag, and corresponding summary status/error."
+  - id: "report_count_reconciliation"
+    severity: "error"
+    rule: "input_document_count = processed_document_count + runtime_failed_document_count + skipped_document_count + review_only_document_count + failed_precheck_document_count; canonical_document_count = processed_document_count; processed_document_count equals all four canonical status counts; event_count equals projectable canonical events from success/needs_review documents and main rows, excluding failed_validation candidates; review_item_count equals all review queue rows; review_event_count equals accepted needs_human_review events and review_item_type=event rows."
+  - id: "daily_run_aggregate_equivalence"
+    severity: "error"
+    rule: "Run-level aggregate artifacts equal the deterministic union of included daily artifacts after duplicate primary-key rejection."

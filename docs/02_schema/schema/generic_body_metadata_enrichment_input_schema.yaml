@@ -1,0 +1,478 @@
+schema_name: "generic_body_metadata_enrichment_input"
+schema_version: "1.0.0"
+status: "implemented"
+owner: "data-pipeline"
+component: "generic_body_metadata_enrichment"
+description: "Input contract for document-level generic TDnet body metadata enrichment."
+
+compatibility:
+  producer_reference: "020_prop_candidates/notebook/tdnet_pdf_preprocessing.py"
+  dependency_type: "file_contract_only"
+  imports_producer_code: false
+  notes:
+    - "The consumer must not write to the producer repository."
+    - "candidate_evidence_spans.jsonl is not used for generic evidence generation."
+
+input_roots:
+  metadata_root:
+    default_path: "data/original/"
+    configurable: true
+  preprocessed_root:
+    default_path: "data/processed/tdnet_pdf_preprocessed/"
+    configurable: true
+
+input_artifacts:
+  - artifact_name: "daily_tdnet_metadata_csv"
+    required: true
+    format: "csv"
+    encoding:
+      accepted:
+        - "utf-8"
+        - "utf-8-sig"
+    path_pattern: "data/original/tdnet_metadata_{yyyymmdd}.csv"
+    grain: "one_row_per_disclosure"
+    primary_key_preference:
+      - "disclosure_number"
+      - "document_url"
+    description: "Raw daily TDnet disclosure metadata without domain-specific title filtering."
+
+  - artifact_name: "normalized_markdown"
+    required: "conditional"
+    requirement: "At least one of normalized_markdown or evidence_package_json must exist."
+    format: "markdown_with_yaml_like_front_matter"
+    path_pattern: "data/processed/tdnet_pdf_preprocessed/{yyyymmdd}/documents/{document_id}/normalized.md"
+    grain: "one_file_per_document"
+    description: "Normalized document text and lightweight document metadata front matter."
+
+  - artifact_name: "document_blocks_jsonl"
+    required: true
+    format: "jsonl"
+    path_pattern: "data/processed/tdnet_pdf_preprocessed/{yyyymmdd}/documents/{document_id}/document_blocks.jsonl"
+    grain: "one_row_per_text_block"
+    description: "Page/block-level source text used for generic rules and evidence generation."
+
+  - artifact_name: "document_tables_jsonl"
+    required: false
+    format: "jsonl"
+    path_pattern: "data/processed/tdnet_pdf_preprocessed/{yyyymmdd}/documents/{document_id}/document_tables.jsonl"
+    grain: "one_row_per_table"
+    missing_behavior: "Continue processing and record warning missing_optional_tables."
+    description: "Extracted tables used as supplementary classification and evidence input."
+
+  - artifact_name: "processing_report_json"
+    required: true
+    format: "json"
+    path_pattern: "data/processed/tdnet_pdf_preprocessed/{yyyymmdd}/documents/{document_id}/processing_report.json"
+    grain: "one_file_per_document"
+    description: "Document extraction status, layout, counts, and text quality."
+
+  - artifact_name: "evidence_package_json"
+    required: "conditional"
+    requirement: "At least one of normalized_markdown or evidence_package_json must exist."
+    format: "json"
+    path_pattern: "data/processed/tdnet_pdf_preprocessed/{yyyymmdd}/documents/{document_id}/evidence_package.json"
+    grain: "one_file_per_document"
+    usage: "Document identity fallback only. Existing candidate evidence is not consumed."
+    description: "Preprocessing package containing document metadata and legacy evidence."
+
+  - artifact_name: "candidate_evidence_spans_jsonl"
+    required: false
+    format: "jsonl"
+    path_pattern: "data/processed/tdnet_pdf_preprocessed/{yyyymmdd}/documents/{document_id}/candidate_evidence_spans.jsonl"
+    grain: "one_row_per_legacy_evidence_span"
+    usage: "ignored"
+    description: "Domain-specific legacy evidence. Explicitly outside this consumer contract."
+
+tables:
+  - table_name: "tdnet_disclosure_metadata_input"
+    source_artifact: "daily_tdnet_metadata_csv"
+    grain: "one_row_per_disclosure"
+    primary_key:
+      preferred:
+        - "disclosure_number"
+      fallback:
+        - "document_url"
+    columns:
+      - name: "disclosure_date"
+        logical_type: "date_string"
+        nullable: false
+        accepted_formats:
+          - "YYYY-MM-DD"
+          - "YYYYMMDD"
+        description: "Disclosure date; must match the target daily file."
+      - name: "disclosure_time"
+        logical_type: "time_string"
+        nullable: true
+        accepted_formats:
+          - "HH:MM"
+          - "HH:MM:SS"
+        description: "TDnet disclosure time."
+      - name: "disclosure_datetime"
+        logical_type: "datetime_string"
+        nullable: true
+        description: "Combined disclosure date and time."
+      - name: "disclosure_number"
+        logical_type: "string"
+        nullable: true
+        conditional_constraint: "At least one of disclosure_number or document_url must be non-empty."
+        description: "Stable TDnet disclosure number and preferred source_id."
+      - name: "code"
+        aliases:
+          - "issuer_code"
+        logical_type: "string"
+        nullable: false
+        normalization: "Preserve leading zeroes and strip surrounding whitespace."
+        description: "Issuer security code."
+      - name: "company_name"
+        aliases:
+          - "issuer_name"
+        logical_type: "string"
+        nullable: false
+        description: "Issuer name."
+      - name: "title"
+        logical_type: "string"
+        nullable: false
+        description: "Original disclosure title."
+      - name: "document_url"
+        logical_type: "uri_string"
+        nullable: false
+        conditional_constraint: "Required in schema v1.0 even when disclosure_number exists."
+        description: "Source PDF URL."
+      - name: "xbrl_url"
+        logical_type: "uri_string"
+        nullable: true
+        description: "Associated XBRL archive URL when available."
+      - name: "has_xbrl"
+        logical_type: "boolean"
+        nullable: true
+        description: "Whether an XBRL URL exists."
+      - name: "market"
+        logical_type: "string"
+        nullable: true
+        description: "TDnet market label."
+      - name: "update_history"
+        logical_type: "string"
+        nullable: true
+        description: "TDnet update or correction label."
+      - name: "list_page"
+        logical_type: "integer"
+        nullable: true
+        constraints:
+          min_inclusive: 1
+        description: "Source list page number."
+      - name: "source_url"
+        logical_type: "uri_string"
+        nullable: true
+        description: "TDnet list page URL."
+      - name: "fetched_at_utc"
+        logical_type: "utc_datetime_string"
+        nullable: true
+        description: "Metadata fetch timestamp."
+      - name: "document_id"
+        logical_type: "string"
+        nullable: true
+        description: "Optional direct link to a preprocessed document; highest matching priority."
+
+  - table_name: "document_blocks_input"
+    source_artifact: "document_blocks_jsonl"
+    grain: "one_row_per_text_block"
+    primary_key:
+      - "block_id"
+    columns:
+      - name: "block_id"
+        logical_type: "string"
+        nullable: false
+      - name: "document_id"
+        logical_type: "string"
+        nullable: false
+      - name: "page_number"
+        logical_type: "integer"
+        nullable: false
+        constraints:
+          min_inclusive: 1
+      - name: "page_layout_type"
+        logical_type: "enum"
+        nullable: false
+        allowed_values:
+          - "doc_like"
+          - "slide_like"
+          - "table_heavy"
+          - "scanned_or_image"
+          - "mixed"
+      - name: "block_order"
+        logical_type: "integer"
+        nullable: false
+        constraints:
+          min_inclusive: 1
+      - name: "block_type"
+        logical_type: "enum"
+        nullable: false
+        allowed_values:
+          - "document_title"
+          - "page_title"
+          - "slide_title"
+          - "section_heading"
+          - "heading"
+          - "paragraph"
+          - "bullet"
+          - "table"
+          - "note"
+          - "footer"
+          - "header"
+          - "unknown"
+        compatibility_note: "heading is accepted for older producer examples."
+      - name: "text"
+        logical_type: "string"
+        nullable: false
+        constraints:
+          min_length: 1
+        description: "Original extracted text after non-destructive whitespace cleanup."
+      - name: "normalized_text"
+        logical_type: "string"
+        nullable: true
+        description: "Producer-normalized text; consumer may recompute matching normalization."
+      - name: "char_count"
+        logical_type: "integer"
+        nullable: true
+        constraints:
+          min_inclusive: 0
+      - name: "bbox"
+        logical_type: "number_array_or_null"
+        nullable: true
+        constraints:
+          exact_length: 4
+      - name: "extraction_method"
+        logical_type: "string"
+        nullable: true
+      - name: "quality_score"
+        logical_type: "float"
+        nullable: true
+        constraints:
+          min_inclusive: 0.0
+          max_inclusive: 1.0
+
+  - table_name: "document_tables_input"
+    source_artifact: "document_tables_jsonl"
+    grain: "one_row_per_table"
+    primary_key:
+      - "table_id"
+    columns:
+      - name: "table_id"
+        logical_type: "string"
+        nullable: false
+      - name: "document_id"
+        logical_type: "string"
+        nullable: false
+      - name: "page_number"
+        logical_type: "integer"
+        nullable: false
+        constraints:
+          min_inclusive: 1
+      - name: "page_layout_type"
+        logical_type: "enum"
+        nullable: true
+        allowed_values:
+          - "doc_like"
+          - "slide_like"
+          - "table_heavy"
+          - "scanned_or_image"
+          - "mixed"
+      - name: "table_order"
+        logical_type: "integer"
+        nullable: false
+        constraints:
+          min_inclusive: 1
+      - name: "markdown_table"
+        logical_type: "string"
+        nullable: true
+      - name: "raw_cells_json"
+        logical_type: "array_of_string_arrays"
+        nullable: true
+      - name: "extraction_method"
+        logical_type: "string"
+        nullable: true
+      - name: "quality_score"
+        logical_type: "float"
+        nullable: true
+        constraints:
+          min_inclusive: 0.0
+          max_inclusive: 1.0
+
+objects:
+  - object_name: "processing_report_input"
+    source_artifact: "processing_report_json"
+    required_fields:
+      - "document_id"
+      - "processing_status"
+      - "document_text_extraction_quality"
+    properties:
+      - name: "document_id"
+        logical_type: "string"
+        nullable: false
+      - name: "source_pdf_path"
+        logical_type: "path_string"
+        nullable: true
+      - name: "sha256_hash"
+        logical_type: "string"
+        nullable: true
+      - name: "page_count"
+        logical_type: "integer"
+        nullable: true
+        constraints:
+          min_inclusive: 1
+      - name: "pdf_layout_type"
+        logical_type: "enum"
+        nullable: true
+        allowed_values:
+          - "doc_like"
+          - "slide_like"
+          - "table_heavy"
+          - "scanned_or_image"
+          - "mixed"
+      - name: "page_layout_summary"
+        logical_type: "json_object"
+        nullable: true
+      - name: "text_char_count"
+        logical_type: "integer"
+        nullable: true
+        constraints:
+          min_inclusive: 0
+      - name: "block_count"
+        logical_type: "integer"
+        nullable: true
+        constraints:
+          min_inclusive: 0
+      - name: "table_count"
+        logical_type: "integer"
+        nullable: true
+        constraints:
+          min_inclusive: 0
+      - name: "evidence_span_count"
+        logical_type: "integer"
+        nullable: true
+        usage: "observability_only"
+      - name: "document_text_extraction_quality"
+        logical_type: "enum"
+        nullable: false
+        allowed_values:
+          - "high"
+          - "medium"
+          - "low"
+      - name: "used_ocr"
+        logical_type: "boolean"
+        nullable: true
+      - name: "used_vision"
+        logical_type: "boolean"
+        nullable: true
+      - name: "processing_status"
+        logical_type: "enum"
+        nullable: false
+        allowed_values:
+          - "success"
+          - "success_with_warnings"
+          - "failed"
+      - name: "errors"
+        logical_type: "string_array"
+        nullable: true
+
+  - object_name: "preprocessed_document_metadata"
+    source_artifact: "normalized_markdown or evidence_package_json"
+    required_fields:
+      - "document_id"
+      - "issuer_code"
+      - "disclosure_date"
+      - "title"
+    properties:
+      - name: "document_id"
+        logical_type: "string"
+        nullable: false
+      - name: "source_id"
+        logical_type: "string"
+        nullable: true
+      - name: "issuer_code"
+        logical_type: "string"
+        nullable: false
+      - name: "issuer_name"
+        logical_type: "string"
+        nullable: true
+      - name: "disclosure_date"
+        logical_type: "date_string"
+        nullable: false
+      - name: "title"
+        logical_type: "string"
+        nullable: false
+      - name: "pdf_layout_type"
+        logical_type: "enum"
+        nullable: true
+        allowed_values:
+          - "doc_like"
+          - "slide_like"
+          - "table_heavy"
+          - "scanned_or_image"
+          - "mixed"
+      - name: "page_count"
+        logical_type: "integer"
+        nullable: true
+
+document_resolution:
+  ordered_keys:
+    - order: 1
+      key:
+        - "document_id"
+      requirement: "Input metadata document_id is non-empty."
+    - order: 2
+      key:
+        - "source_id"
+      metadata_mapping: "disclosure_number, falling back to document_url"
+    - order: 3
+      key:
+        - "disclosure_date"
+        - "issuer_code"
+        - "normalized_title"
+  ambiguity_behavior: "fail"
+  no_match_error: "preprocessed_document_not_found"
+  multiple_match_error: "ambiguous_preprocessed_document"
+  title_normalization:
+    - "unicode_nfkc"
+    - "lowercase"
+    - "convert_full_width_spaces"
+    - "collapse_whitespace"
+    - "remove_matching_punctuation"
+
+validation_rules:
+  - id: "metadata_required_columns"
+    severity: "error"
+    rule: "daily_tdnet_metadata_csv must contain disclosure_date, code or issuer_code, company_name or issuer_name, title, and document_url"
+  - id: "source_id_available"
+    severity: "error"
+    rule: "at least one of disclosure_number or document_url must be non-empty"
+  - id: "target_date_match"
+    severity: "error"
+    rule: "metadata disclosure_date must equal the yyyymmdd represented by the daily input file"
+  - id: "identity_artifact_available"
+    severity: "error"
+    rule: "at least one of normalized_markdown or evidence_package_json must exist"
+  - id: "required_document_artifacts"
+    severity: "error"
+    rule: "document_blocks_jsonl and processing_report_json must exist"
+  - id: "blocks_non_empty"
+    severity: "error"
+    rule: "document_blocks_jsonl must contain at least one non-empty text block"
+  - id: "document_id_consistency"
+    severity: "error"
+    rule: "directory document_id, processing_report document_id, block document_id, and table document_id must match"
+  - id: "preprocessing_success"
+    severity: "error"
+    rule: "processing_report processing_status must equal success or success_with_warnings"
+  - id: "preprocessing_warning_passthrough"
+    severity: "warning"
+    rule: "processing_status success_with_warnings must add preprocessing_success_with_warnings to output warning_codes"
+  - id: "low_text_quality_review"
+    severity: "warning"
+    rule: "document_text_extraction_quality low requires candidate_stage needs_review"
+  - id: "optional_tables"
+    severity: "warning"
+    rule: "missing document_tables_jsonl does not fail processing"
+  - id: "legacy_evidence_ignored"
+    severity: "info"
+    rule: "candidate_evidence_spans_jsonl must not be used to determine generic classification or evidence"

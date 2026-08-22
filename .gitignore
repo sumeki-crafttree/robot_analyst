@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Office 一時ファイル（開いたままのロックファイル）
+~$*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 環境変数・認証情報
+.env
+.env.*
+*.key
+*.pem
