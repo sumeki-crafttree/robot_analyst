@@ -22,3 +22,6 @@ data/original/
 data/raw/
 data/processed/
 data/report/
+
+# 旧設計の退避先（履歴はローカルのみ保持）
+docs/02_schema/archive/
