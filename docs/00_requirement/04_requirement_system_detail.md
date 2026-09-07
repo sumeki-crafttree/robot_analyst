@@ -94,25 +94,65 @@ v0.1の以下の判断は正しいため維持する。
 
 ## 4. 分類体系
 
-**コード総数は22。** 内訳は macro_theme 8、company_action 8、action_status 3、relationship_type 3。
+**コード総数は115。** 内訳は macro_theme L1 16（うち `other` 1）＋L2 85、company_action 8、action_status 3、relationship_type 3。L2はすべてL1配下の階層であり、次元数は増えていない。
 
-### 4.1 `macro_theme`（8）
+### 4.1 `macro_theme`（15＋その他）
 
-外部環境で何が起きたかを表す。ニチレイ／食品を対象とした初期セットであり、業種追加時に拡張する。
+外部環境で何が起きたかを表す。**2階層とする。** 正本は `data/master/dim_macro_theme_seed.csv`（L1）と `data/master/dim_macro_subtheme_seed.csv`（L2・85件）であり、本節は一覧のみを示す。
 
-| コード | 内容 |
+| コード | 名称 |
 |---|---|
-| `input_cost` | 原材料・燃料・包装資材の価格変動 |
-| `labor` | 人件費上昇・人手不足 |
-| `logistics` | 物流費・輸送能力の制約 |
-| `fx` | 為替変動 |
-| `demand` | 消費動向・需要の変化 |
-| `supply_disruption` | 調達難・天候・災害・供給障害 |
-| `regulation` | 規制・制度の変更 |
-| `industry_structure` | 業界再編・競争環境の変化 |
+| `commodity_price` | 商品市況・資源価格 |
+| `import_price` | 輸入物価 |
+| `fx` | 為替 |
+| `labor_market` | 労働市場 |
+| `demand` | 需要環境 |
+| `consumer` | 消費・家計 |
+| `financial_conditions` | 金融環境 |
+| `trade_policy` | 通商政策 |
+| `geopolitics` | 地政学 |
+| `supply_chain` | サプライチェーン |
+| `industry_supply_demand` | 業界需給 |
+| `tech_investment_cycle` | 技術・投資サイクル |
+| `regulation` | 規制・制度 |
+| `asset_price` | 資産価格 |
+| `weather_disaster` | 天候・自然災害 |
+| `other` | その他（分類体系の欠落を検知する受け皿） |
 
+**L2（サブテーマ）を持つ理由**
+
+- **L1だけでは個社への翻訳ができない。** `commodity_price` と分かっても、原油なら物流費・包装資材へ、穀物なら飼料経由で畜産原料へ、水産物なら直接原価へと、波及経路が全く異なる。マクロ変数の粒度が、そのまま翻訳の精度になる。
+- **横断比較にはコード化が必要である。** サブテーマを定義文の中の自由記述に留めると「原油に言及した開示を全社横断で」というクエリが書けない。
+- 1次元内の階層であり、次元を増やすものではない。v0.2で削減した122コードは7次元の掛け算であって、性質が異なる。
+
+**L2は任意項目とする**
+
+- **L1は必須、L2は null を許容する。** 本文から確信を持ってL2を特定できない場合、LLMはL2を空で返す。
+- これにより、L2が薄くてもL1での集計は常に成立する。データが分散して使えなくなる事態を避けるための設計である。
+- L2の網羅性は運用で改善する。特定のL1に対してL2 nullが多いテーマは、L2の定義不足を示す信号として扱う。
+
+**マスタが保持する項目**
+
+| カラム | 用途 |
+|---|---|
+| `theme_code` / `theme_name` | 識別子と名称 |
+| `definition` | 1文の定義 |
+| `includes` | 含む例。判定の下限を示す |
+| `excludes` | **含まない例。他テーマや他レイヤーとの境界を明示する** |
+| `typical_expressions` | 開示本文での典型表現 |
+
+L2側は `theme_code` / `subtheme_code` / `subtheme_name` / `typical_expressions` を持つ。
+
+- **`excludes` を必須項目とする。** 判定が揺れるのは境界例であり、「何を含むか」より「何を含まないか」のほうが一貫性に効く。たとえば `commodity_price`（国際市況）と `import_price`（日本への伝達段階）、`geopolitics`（情勢）と `trade_policy`（政策手段）、`financial_conditions`（金利）と `asset_price`（資産価格）は、いずれも `excludes` で相互に切り分けている。
 - 1ファクトに複数付与できる。**上限は3件**とする。
-- v0.1の15コードのうち `interest_rate` `inflation` `asset_price` `trade_policy` `geopolitics` は、食品の適時開示での出現頻度が低いため初期セットから外す。必要になった時点でマスタへ行追加する。
+- **レイヤーを越えたものは付与しない。** マクロテーマは「企業の外部で何が起きたか」であり、企業への影響（原材料コスト上昇）や企業アクション（値上げ）は含めない。各テーマの `excludes` にこの境界を明記している。
+- マクロ要因の記述がない開示には、**テーマを付与しない**。`other` は「記述はあるが既存テーマで表現できない」場合に限る。
+
+**採用の経緯**
+
+- 日本銀行「経済・物価情勢の展望」2022年以降のBOX分析をトップダウンの参照源とし、網羅性を検証した上で構成している。詳細は[マクロテーマ分類体系](../99_feedback/2026-09-01_macro_theme_taxonomy.md)を参照。
+- **`中国需要` `自動車需要` のような個別テーマは作らない。** `demand` × 地域 × 最終需要市場の組み合わせで表現する。テーマの増殖を避けるためである。
+- 元案にあった「物価・価格形成」は採用していない。価格転嫁は外部で起きた事象ではなく**マクロ要因が企業に届く経路**であり、本次元の定義（外部で何が起きたか）に合わない。これを残すと1つの開示から `commodity_price`（原因）・価格形成（経路）・`price_change`（アクション）が同時に付与され、判定が揺れる。**必要になればマスタへの1行追加で戻せる。**
 
 ### 4.2 `company_action`（8）
 
@@ -140,13 +180,13 @@ v0.1の以下の判断は正しいため維持する。
 
 ### 4.4 `relationship_type`（3）
 
-対象企業から見た関係区分。**02§4および03§3の定義に従う。**
+**ウォッチ企業から見た**関連企業の関係区分。**02§2および03§3の定義に従う。**
 
 `peer` / `partner` / `customer`
 
-- 1企業に複数付与できる。
+- 1つの（ウォッチ企業, 関連企業）の組に対して複数付与できる。
 - v0.1の13区分（`peer_direct` 〜 `macro_proxy`）は、02が定義する3区分と整合しないため採用しない。
-- `dim_company` の属性として保持し、独立したdimテーブルにはしない。
+- **関係は企業の属性ではなく、ウォッチ企業と関連企業の間の辺である。** 同じ企業でも、どのウォッチ企業から見るかで関係が変わるため（味の素はニチレイから見れば `peer` かつ `partner`、キオクシアから見れば無関係）、`dim_company` の属性にはできない。`bridge_watch_company` に保持する（5章）。
 
 ### 4.5 廃止する分類軸
 
@@ -168,24 +208,38 @@ v0.1の以下の判断は正しいため維持する。
 
 | テーブル | 種別 | 内容 |
 |---|---|---|
-| `dim_company` | マスタ | 企業マスタ。`relationship_type` を属性に持つ |
+| `dim_company` | マスタ | 企業マスタ。証券コード・名称・業種のみ。関係は持たない |
+| `bridge_watch_company` | ブリッジ | ウォッチ企業 × 関連企業。関係区分・優先度・接点事業領域 |
 | `dim_macro_theme` | マスタ | マクロテーマ8件の定義 |
 | `fact_disclosure` | ファクト | 開示の原本メタデータ。マスタ突合結果を含む |
 | `fact_extracted_fact` | ファクト | 開示から抽出したファクト |
 | `fact_theme_mapping` | ブリッジ | ファクト × マクロテーマ |
-| `fact_implication` | ファクト | ファクト × 対象企業への示唆 |
+| `fact_implication` | ファクト | ファクト × ウォッチ企業への示唆 |
 
 ### 5.2 主なカラム
 
-**`dim_company`**
+**`dim_company`**（純粋な企業マスタ）
 
 ```text
 company_id          証券コード
-company_name
-relationship_type   peer / partner / customer（複数可）
-business_area       対象企業と重なる事業領域
-is_target           対象企業（ニチレイ）本体か
+company_name        JPXマスタ上の名称
+jpx_sector_17       17業種区分
+jpx_sector_33       33業種区分
 ```
+
+**`bridge_watch_company`**（ウォッチ企業から見た関係）
+
+```text
+watch_company_id    ウォッチ企業の証券コード
+company_id          関連企業の証券コード
+relationship_type   peer / partner / customer（複数可）
+priority            high / mid / low
+business_area       ウォッチ企業と接する事業領域
+note                選定理由
+```
+
+- ウォッチ企業の集合は `bridge_watch_company.watch_company_id` の distinct として定義される。`is_target` フラグは持たない。
+- `watch_company_id = company_id` の行は作らない。自社に対する関係区分は定義しないため。
 
 **`fact_disclosure`**
 
@@ -263,7 +317,8 @@ inference_confidence
       "summary": "string",
       "fact_date": "YYYY-MM-DD",
       "effective_date": "YYYY-MM-DD | null",
-      "macro_themes": ["input_cost"],
+      "macro_themes": ["commodity_price"],
+      "macro_subthemes": ["grain"],
       "company_action": "price_change",
       "action_status": "announced",
       "direction": "up",
@@ -279,7 +334,7 @@ inference_confidence
 }
 ```
 
-- `macro_themes` は最大3件。
+- `macro_themes`（L1）は最大3件。`macro_subthemes`（L2）は任意で、特定できない場合は空配列とする。
 - コード値は4章の定義以外を許容しない。違反時はvalidationで弾く。
 
 ### 6.3 粒度
@@ -300,7 +355,7 @@ v0.1の方針を維持する。**LLMに最終DBレコードを直接生成させ
 | マクロテーマへの分類 | 数値・単位の正規化 |
 | 企業アクションの識別 | taxonomyコードの検証 |
 | evidence spanの特定 | schema validation |
-| 対象企業への示唆の推論 | 重複排除・冪等性の担保 |
+| ウォッチ企業への示唆の推論 | 重複排除・冪等性の担保 |
 | | 原本URIの管理 |
 
 - LLMは候補値と根拠を返し、後段でvalidationとmaster lookupを行う。
@@ -317,7 +372,7 @@ v0.1の方針を維持する。**LLMに最終DBレコードを直接生成させ
 | 名称 | 意味 | 例 |
 |---|---|---|
 | `extraction_confidence` | 原文からその事実を正しく抽出できている確度 | 「9月1日から値上げ」→ 0.99 |
-| `inference_confidence` | 対象企業への示唆を推論した確度 | 競合値上げ → 自社の価格転嫁余地拡大 → 0.73 |
+| `inference_confidence` | ウォッチ企業への示唆を推論した確度 | 競合値上げ → 自社の価格転嫁余地拡大 → 0.73 |
 
 - **事実抽出のconfidenceと推論のconfidenceを混ぜないことを必須とする。** これはv0.1の判断を維持する。
 - v0.1の `normalization_confidence` と `relevance_confidence` は、それぞれ `extraction_confidence` と `inference_confidence` に含める。分類の誤りは抽出の誤りとして扱い、関連性の判定は推論として扱う。
@@ -342,7 +397,7 @@ v0.1の17ステップを**9ステップに集約する**。
 **日次ジョブ**
 
 1. TDnetから当日分の開示を取得し、**source_typeを問わず**original層へ保存する
-2. `dim_company` と証券コードで突合し、対象外企業の開示を除外する
+2. `bridge_watch_company` の `company_id` と証券コードで突合し、いずれのウォッチ企業とも関係のない開示を除外する
 3. `source_type` で絞り込み、MVPの処理対象（`timely_disclosure` / `forecast_revision`）以外を以降の処理から外す
 4. PDF・XMLをテキスト化し、raw層へ保存する
 5. LLMを1開示1回呼び、structured outputを得る

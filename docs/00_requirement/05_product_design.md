@@ -128,14 +128,15 @@ report/weekly/2026-W36/report.html
 | テーブル | パーティション | クラスタリング |
 |---|---|---|
 | `dim_company` | なし | なし |
+| `bridge_watch_company` | なし | `watch_company_id` |
 | `dim_macro_theme` | なし | なし |
 | `fact_disclosure` | `DATE(disclosure_datetime)` | `company_id` |
 | `fact_extracted_fact` | `fact_date` | `company_id`, `company_action` |
 | `fact_theme_mapping` | なし | `fact_id` |
-| `fact_implication` | `DATE(created_at)` | `target_company_id` |
+| `fact_implication` | `DATE(created_at)` | `watch_company_id` |
 
 - 週次レポートは直近1週間のみを読むため、日付パーティションが常に効く。**BigQueryのクエリ課金を無料枠内に収める設計上の要**である。
-- `relationship_type` と `business_area` は `ARRAY<STRING>`。ブリッジテーブルを追加せず6テーブル構成を維持する（6.3）。
+- `relationship_type` と `business_area` は `bridge_watch_company` 上の `ARRAY<STRING>`（6.3）。
 
 ### 5.1 主キーとID生成
 
@@ -154,7 +155,7 @@ BigQueryは制約を持たないため、IDの一意性はアプリケーショ�
 CREATE VIEW product.v_fact_enriched AS
 SELECT
   f.fact_id, f.fact_date, f.effective_date, f.summary,
-  c.company_name, c.relationship_type, c.business_area,
+  c.company_name, w.watch_company_id, w.relationship_type, w.priority, w.business_area,
   f.company_action, f.action_status, f.direction,
   f.quantitative_value, f.quantitative_unit,
   ARRAY(SELECT t.theme_code FROM product.fact_theme_mapping m
@@ -166,15 +167,19 @@ SELECT
 FROM product.fact_extracted_fact f
 JOIN product.fact_disclosure d USING(disclosure_id)
 JOIN product.dim_company c ON c.company_id = f.company_id
-LEFT JOIN product.fact_implication i USING(fact_id);
+JOIN product.bridge_watch_company w ON w.company_id = f.company_id
+LEFT JOIN product.fact_implication i
+       ON i.fact_id = f.fact_id AND i.watch_company_id = w.watch_company_id;
 ```
 
-- 02§3の「開発者が毎日使って嬉しい」を満たすための唯一のView。これを引けば6テーブルのJOINを書かずに済む。
+- 02§3の「開発者が毎日使って嬉しい」を満たすための唯一のView。これを引けば7テーブルのJOINを書かずに済む。
+- **1ファクトは、それを参照するウォッチ企業の数だけ行が展開される。** ウォッチ企業を絞って引くことを前提とする（`WHERE watch_company_id = '2871'`）。
 
 ## 6. マスタ設計
 
 ### 6.1 なぜこのマスタが最重要か
 
+- **本プロダクトの起点は「ウォッチ企業」である。** 利用者が watch する上場企業を登録し、そこから peer／partner／customer を展開する。レポートはウォッチ企業ごとに1本生成される（02§2）。
 - 03§3が述べるとおり、**マスタの網羅性がプロダクトの網羅性の上限を直接決める**。
 - 04§8のパイプラインでは、TDnetの全開示をこのマスタと突合し、一致しない開示を破棄する。
 - したがって、マスタにない企業の開示は**構造的に、恒久的に拾えない**。後段をどれだけ改善しても回復しない。
@@ -187,26 +192,42 @@ LEFT JOIN product.fact_implication i USING(fact_id);
 - 初期100社の内訳は、17業種区分で 食品45・小売27・商社卸売11・運輸物流8・素材化学4・情報通信2・電力ガス2・建設資材1 の8業種にまたがる。
 - **マスタの選定軸は業種ではなく、対象企業との関係である。** 業種で切ると、値上げの波及を追ううえで不可欠な包装資材メーカーや外食チェーンが落ちる。
 
+**選定基準についての禁止事項**
+
+- **開示イベントの出やすさを選定基準にしてはならない。** マスタは「ウォッチ企業の分析上、見る必要があるか」だけで決める。
+- レポートの分量が薄いことは、マスタを入れ替える理由にならない。分量の問題はソースの追加（決算説明資料など）かレポート頻度の調整で解く。
+- 判断根拠は、イベント密度で企業を選ぶと**関連性の低い企業がレポートを占め、関連性の高い企業が落ちる**ためである。実測でも、減損・希望退職・固定資産譲渡といったイベントは業績が苦しい中小型株に集中しており、ウォッチ企業にとって重要な大型の直接競合ほどイベント密度は低い。**イベント密度と分析上の関連性は、しばしば逆相関する。**
+
 ### 6.3 スキーマ
+
+**関係は企業の属性ではなく、ウォッチ企業と関連企業の間の辺である。** 同じ企業でも、どのウォッチ企業から見るかで関係が変わる。味の素はニチレイから見れば `peer` かつ `partner` だが、キオクシアから見れば無関係であり、逆にニチレイをウォッチ企業とすれば味の素から見たニチレイは `peer` になる。したがってマスタは2本に分かれる。
+
+**`dim_company`** — 純粋な企業マスタ
 
 | カラム | 型 | 必須 | 内容 |
 |---|---|---|---|
 | `company_id` | STRING | ○ | 証券コード。英数字を許容する（例: `130A`） |
 | `company_name` | STRING | ○ | JPXマスタ上の名称 |
-| `is_target` | BOOL | ○ | 対象企業本体か |
-| `relationship_type` | ARRAY\<STRING\> | ○※ | `peer` / `partner` / `customer`。複数可 |
-| `priority` | STRING | ○※ | `high` / `mid` / `low`。レポートでの優先度 |
-| `business_area` | ARRAY\<STRING\> | ○ | 対象企業と接する事業領域 |
 | `jpx_sector_17` | STRING | | 17業種区分 |
 | `jpx_sector_33` | STRING | | 33業種区分 |
+
+**`bridge_watch_company`** — ウォッチ企業から見た関係
+
+| カラム | 型 | 必須 | 内容 |
+|---|---|---|---|
+| `watch_company_id` | STRING | ○ | ウォッチ企業の証券コード |
+| `company_id` | STRING | ○ | 関連企業の証券コード |
+| `relationship_type` | ARRAY\<STRING\> | ○ | `peer` / `partner` / `customer`。複数可 |
+| `priority` | STRING | ○ | `high` / `mid` / `low`。レポートでの優先度 |
+| `business_area` | ARRAY\<STRING\> | ○ | ウォッチ企業と接する事業領域 |
 | `note` | STRING | | 選定理由・注記 |
 
-※ `is_target = true` の行のみ `relationship_type` を空とする。自社に対する関係区分は定義しないため。
-
+- **ウォッチ企業の集合は `bridge_watch_company.watch_company_id` の distinct として定義される。** `is_target` のようなフラグは持たない。
+- `watch_company_id = company_id` の行は作らない。自社に対する関係区分は定義しないため。
 - **`priority` は100社規模にしたことで必要になった列である。** 31社の時点では全社を等しく扱えたが、100社では週次レポートに載る件数が増え、ニッスイと地方スーパーを同列に並べると読めなくなる。レポート生成時の並び順と、分量が多い週の足切りに用いる。
 - `company_id` を **INT64にしてはならない。** JPXは2024年以降、英数字混在のコード（`130A` 等）を発行している。実際にJPXマスタ内に存在する。
-- `relationship_type` と `business_area` は配列とし、04§5の6テーブル構成を崩さない（ブリッジテーブルを追加しない）。
-- シードCSVでは配列を `|` 区切りで表現し、ロード時に分割する。
+- `relationship_type` と `business_area` は `bridge_watch_company` 上の配列とする。同一の（ウォッチ企業, 関連企業）の組に複数の関係を許容するためである。
+- シードCSVは `dim_company_seed.csv` と `bridge_watch_company_seed.csv` の2本に分ける。配列は `|` 区切りで表現し、ロード時に分割する。
 - **シードCSVの文字コードは UTF-8 with BOM とする。** ExcelはBOMを見てUTF-8と判定するため文字化けせず、同時にVS Code・GitHub・BigQueryといったUTF-8前提のツールでもそのまま読める。Shift-JISにすると前者しか満たせない。
 - 読み込み側はBOMを除去すること。Pythonでは `encoding='utf-8-sig'` を指定する。
 
@@ -280,7 +301,7 @@ MVPでは3区分のみを用いる（04§4.4）。判定は**企業単位**で�
 
 **意図的に外した企業** — ローソン（2651）と日本通運（9062）は上場廃止済みで、TDnetに開示が出ない。テーブルマークとファミリーマートは非上場であり、親会社（JT・伊藤忠）で拾うとたばこ・商社の開示ノイズが大半を占める。飲料・菓子の専業各社は、冷凍食品との需要の代替性が低いため含めていない。
 
-**31社から100社への拡張理由** — 期中開示に処理対象を絞った結果、週次レポートに載る件数が2〜7件/週まで下がる見込みとなった（10.4）。LLM呼び出しはこの規模でも月100回程度に留まり、コスト上限に対して十分な余裕がある。**企業数を決めるのはコストではなく選定品質である**という原則に従い、関係が説明できる範囲で100社まで広げた。
+**31社から100社への拡張理由** — 31社では、低温物流の競合（横浜冷凍・キユーソー流通システム）、原料の主要供給元（日清オイリオ・J-オイルミルズ・製粉各社）、需要側の月次シグナル源（外食・量販）が欠けており、**ニチレイの事業構造を説明するうえで穴があった**。100社への拡張は、この穴を埋めるために行ったものである。コスト上の余裕（LLM呼び出しは月100回程度）は制約にならないことの確認であって、拡張の理由ではない。
 
 ### 6.7 保守方針
 
@@ -295,14 +316,16 @@ MVPでは3区分のみを用いる（04§4.4）。判定は**企業単位**で�
 
 **品質基準**
 
-- `company_id` がJPXマスタに実在すること。ロード時に検証する。
-- `is_target = true` の行が、ちょうど1件存在すること。
-- `is_target = false` の全行に `relationship_type` が1件以上あること。
+- `company_id` および `watch_company_id` がJPXマスタに実在すること。ロード時に検証する。
+- `bridge_watch_company` の全行に `relationship_type` が1件以上あること。
+- `watch_company_id = company_id` の行が存在しないこと。
+- `bridge_watch_company.company_id` が `dim_company` に存在すること。
 
 **既知の限界**
 
 - 初期マスタは人手で作成しており、網羅性の保証がない（03§3）。10社は「実用に足るか」を検証するための出発点であり、完成形ではない。
 - 関係区分は企業単位で付与しており、セグメント単位の粒度を持たない。ニチレイの低温物流セグメントに対してのみ競合である企業も、企業全体として `peer` になる。
+- **MVPのウォッチ企業はニチレイ1社のみである。** レポートはウォッチ企業ごとに生成されるため、ウォッチ企業を増やしても1本あたりの分量は増えない。分量を増やすには、そのウォッチ企業の関連企業を増やすかソースを追加する必要がある。
 - 非上場の重要な取引先（テーブルマーク、ファミリーマート等）は、適時開示を出さないため構造的に扱えない。これは適時開示を唯一のソースとする設計（02§5）の帰結である。
 
 **稼働後の確認事項**
@@ -469,5 +492,6 @@ error_count, error_summary
 - ただし業績予想修正（`forecast_revision`）は決算期に寄るため、振れが完全に消えるわけではない。
 - **1件あたりのトークン量も下がる。** 期中開示は1〜3ページ、決算説明資料は30〜50ページであり、10〜20倍の差がある。件数では四半期資料が4割でも、トークン量では8〜9割を占めていた。
 - LLM呼び出しが月33〜100回に留まるため、**コスト上限に対する制約はマスタの企業数ではない。** 企業数を決めるのはマスタの選定品質であって、コストではない。
-- **週8〜23件という分量は、週次レポートとして妥当な水準である。** 31社時点の2〜7件/週では薄かったため、100社へ拡張した（6.6）。
+- **本節の件数は「レポートに何が載るか」の見積りであって、マスタの選定基準ではない。** 分量が想定を下回っても、マスタに企業を足して埋めてはならない（6.2）。
+- 分量が不足する場合の打ち手は、①決算説明資料をPhase 1に入れる、②レポート頻度を調整する、③ニュースリリースをソースに加える、のいずれかである。マスタの入れ替えは打ち手に含まない。
 - ただし上振れ時の23件は、レポートとして読み切れる上限に近い。`priority` による並び替えと足切りで対応する（6.3）。
