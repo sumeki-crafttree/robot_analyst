@@ -67,6 +67,9 @@ ROOT_DIR = "/content/drive/MyDrive/git/prop_candidates/"
 METADATA_DIR = ROOT_DIR + "data/original/"
 SAMPLE_DIR = ROOT_DIR + "data/samples/"
 PROCESSED_DIR = ROOT_DIR + "data/processed/"
+# 前処理の出力先。tdnet_pdf_preprocessing.py（旧）の出力と混ざらないよう
+# _02 を分ける。配下は公開日ごとのフォルダに切る。
+PREPROCESSED_DIR = PROCESSED_DIR + "tdnet_pdf_preprocessed_02/"
 OUTPUT_ENCODING = "utf-8"
 
 # ログはプロジェクト直下にまとめる。data/ や models/ と同じ並び。
@@ -600,12 +603,17 @@ def load_targets() -> List[Dict[str, Any]]:
 # -----------------------------
 # 6) 再開可能性（02§8.3）
 # -----------------------------
+def _day_dir(day: str) -> str:
+    """公開日ごとの出力フォルダ。<PREPROCESSED_DIR>/yyyymmdd/"""
+    return os.path.join(PREPROCESSED_DIR, day)
+
+
 def _output_path_for_day(day: str) -> str:
-    return os.path.join(PROCESSED_DIR, f"disclosures_{day}.jsonl")
+    return os.path.join(_day_dir(day), f"disclosures_{day}.jsonl")
 
 
 def _csv_path_for_day(day: str) -> str:
-    return os.path.join(PROCESSED_DIR, f"disclosures_{day}.csv")
+    return os.path.join(_day_dir(day), f"disclosures_{day}.csv")
 
 
 def _source_key(meta: Dict[str, Any]) -> str:
@@ -716,7 +724,7 @@ def _log_path() -> str:
 
 def _log_header() -> str:
     """ログ先頭に残す実行条件。スクリプトごとに中身が変わる。"""
-    return f"metadata={os.path.basename(METADATA_DIR.rstrip(chr(47)))} out={os.path.basename(PROCESSED_DIR.rstrip(chr(47)))}"
+    return f"metadata={os.path.basename(METADATA_DIR.rstrip(chr(47)))} out={os.path.basename(PREPROCESSED_DIR.rstrip(chr(47)))}"
 
 
 class _Tee:
@@ -871,7 +879,7 @@ def _with_run_log(fn: Any) -> Any:
 
 @_with_run_log
 def main() -> None:
-    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    os.makedirs(PREPROCESSED_DIR, exist_ok=True)
 
     targets = load_targets()
     if MAX_DOCUMENTS is not None and MAX_DOCUMENTS > 0:
@@ -910,6 +918,7 @@ def main() -> None:
                 continue
 
             if day not in handles:
+                os.makedirs(_day_dir(day), exist_ok=True)
                 handles[day] = open(_output_path_for_day(day), "a", encoding=OUTPUT_ENCODING)
                 if WRITE_CSV:
                     csv_handles[day], csv_writers[day] = open_csv_appender(_csv_path_for_day(day))

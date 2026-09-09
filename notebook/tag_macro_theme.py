@@ -49,7 +49,11 @@ MODE = "tag"  # "tag" | "report"
 ROOT_DIR = "/content/drive/MyDrive/git/prop_candidates/"
 MASTER_DIR = ROOT_DIR + "data/master/"
 PROCESSED_DIR = ROOT_DIR + "data/processed/"
-PRODUCT_DIR = ROOT_DIR + "data/product/"
+# preprocess_disclosures.py の出力。公開日ごとのフォルダに分かれている。
+PREPROCESSED_DIR = PROCESSED_DIR + "tdnet_pdf_preprocessed_02/"
+# タグ付け結果。<run_tag>/<公開日>/ に分ける。run_tag を上に置くのは、
+# 02§9 で量子化水準を並べて比較するため。モデルごとに丸ごと分かれる。
+MACRO_LABELED_DIR = PROCESSED_DIR + "macro_labeled/"
 SAMPLE_DIR = ROOT_DIR + "data/samples/"
 MODEL_DRIVE_DIR = ROOT_DIR + "models/"
 # ログはプロジェクト直下にまとめる。data/ や models/ と同じ並び。
@@ -182,7 +186,12 @@ def _run_tag() -> str:
 
 
 def _run_dir() -> str:
-    return os.path.join(PRODUCT_DIR, _run_tag())
+    return os.path.join(MACRO_LABELED_DIR, _run_tag())
+
+
+def _day_dir(day: str) -> str:
+    """公開日ごとの出力フォルダ。<MACRO_LABELED_DIR>/<run_tag>/yyyymmdd/"""
+    return os.path.join(_run_dir(), day)
 
 
 def _log_path() -> str:
@@ -572,27 +581,37 @@ def load_documents() -> List[Dict[str, Any]]:
               + (f" days={START_DATE}..{END_DATE}" if days is not None else ""))
         return docs
 
-    if not os.path.exists(PROCESSED_DIR):
-        raise FileNotFoundError(f"processed dir not found: {PROCESSED_DIR}")
-    pattern = re.compile(r"^disclosures_(\d{8})\.jsonl$")
-    matched = [(m.group(1), m.group(0)) for m in (pattern.match(n) for n in os.listdir(PROCESSED_DIR)) if m]
-    if not matched:
-        raise RuntimeError(
-            f"no disclosures_yyyymmdd.jsonl under: {PROCESSED_DIR}\n"
+    if not os.path.exists(PREPROCESSED_DIR):
+        raise FileNotFoundError(
+            f"preprocessed dir not found: {PREPROCESSED_DIR}\n"
             "preprocess_disclosures.py を先に実行してください。"
         )
-    names = sorted(name for day, name in matched if days is None or day in days)
-    if not names:
+    # <PREPROCESSED_DIR>/yyyymmdd/disclosures_yyyymmdd.jsonl
+    day_pattern = re.compile(r"^(\d{8})$")
+    matched: List[Tuple[str, str]] = []
+    for name in sorted(os.listdir(PREPROCESSED_DIR)):
+        if not day_pattern.match(name):
+            continue
+        path = os.path.join(PREPROCESSED_DIR, name, f"disclosures_{name}.jsonl")
+        if os.path.exists(path):
+            matched.append((name, path))
+    if not matched:
         raise RuntimeError(
-            f"no disclosures file in range {START_DATE}..{END_DATE} under: {PROCESSED_DIR}\n"
+            f"no yyyymmdd/disclosures_yyyymmdd.jsonl under: {PREPROCESSED_DIR}\n"
+            "preprocess_disclosures.py を先に実行してください。"
+        )
+    paths = [path for day, path in matched if days is None or day in days]
+    if not paths:
+        raise RuntimeError(
+            f"no disclosures file in range {START_DATE}..{END_DATE} under: {PREPROCESSED_DIR}\n"
             f"存在するのは {sorted(d for d, _ in matched)} です。"
         )
-    for name in names:
-        for line in open(os.path.join(PROCESSED_DIR, name), encoding="utf-8"):
+    for path in paths:
+        for line in open(path, encoding="utf-8"):
             line = line.strip()
             if line:
                 docs.append(json.loads(line))
-    print(f"[info] documents from processed: {len(docs)} files={len(names)}"
+    print(f"[info] documents from processed: {len(docs)} files={len(paths)}"
           + (f" days={START_DATE}..{END_DATE}" if days is not None else ""))
     return docs
 
@@ -1023,19 +1042,19 @@ def _theme_mention_id(document_id: str, theme_code: Any, subtheme_code: Any, evi
 
 
 def _themes_path(day: str) -> str:
-    return os.path.join(_run_dir(), f"macro_themes_{day}.jsonl")
+    return os.path.join(_day_dir(day), f"macro_themes_{day}.jsonl")
 
 
 def _runlog_path(day: str) -> str:
-    return os.path.join(_run_dir(), f"runlog_{day}.jsonl")
+    return os.path.join(_day_dir(day), f"runlog_{day}.jsonl")
 
 
 def _themes_csv_path(day: str) -> str:
-    return os.path.join(_run_dir(), f"macro_themes_{day}.csv")
+    return os.path.join(_day_dir(day), f"macro_themes_{day}.csv")
 
 
 def _runlog_csv_path(day: str) -> str:
-    return os.path.join(_run_dir(), f"runlog_{day}.csv")
+    return os.path.join(_day_dir(day), f"runlog_{day}.csv")
 
 
 THEME_CSV_FIELDS: Sequence[str] = (
@@ -1110,10 +1129,11 @@ def load_processed_ids() -> Set[str]:
     run_dir = _run_dir()
     if not os.path.exists(run_dir):
         return done
-    for name in sorted(os.listdir(run_dir)):
-        if not re.match(r"^macro_themes_\d{8}\.jsonl$", name):
+    for day in sorted(os.listdir(run_dir)):
+        path = os.path.join(run_dir, day, f"macro_themes_{day}.jsonl")
+        if not re.match(r"^\d{8}$", day) or not os.path.exists(path):
             continue
-        for line in open(os.path.join(run_dir, name), encoding="utf-8"):
+        for line in open(path, encoding="utf-8"):
             line = line.strip()
             if not line:
                 continue
@@ -1162,6 +1182,7 @@ def tag_all() -> None:
 
             day = _date_to_compact(doc.get("disclosure_date", ""))
             if day not in theme_handles:
+                os.makedirs(_day_dir(day), exist_ok=True)
                 theme_handles[day] = open(_themes_path(day), "a", encoding=OUTPUT_ENCODING)
                 runlog_handles[day] = open(_runlog_path(day), "a", encoding=OUTPUT_ENCODING)
                 if WRITE_CSV:
@@ -1361,19 +1382,20 @@ def _load_run_outputs() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     themes: List[Dict[str, Any]] = []
     runlog: List[Dict[str, Any]] = []
     days = allowed_days()
-    for name in sorted(os.listdir(run_dir)):
-        path = os.path.join(run_dir, name)
-        m = re.match(r"^(macro_themes|runlog)_(\d{8})\.jsonl$", name)
-        if not m:
+    for day in sorted(os.listdir(run_dir)):
+        if not re.match(r"^\d{8}$", day):
             continue
         # tag と同じ範囲で集計する。範囲を変えずに report を回せば同じ母数になる。
-        if days is not None and m.group(2) not in days:
+        if days is not None and day not in days:
             continue
-        target = themes if m.group(1) == "macro_themes" else runlog
-        for line in open(path, encoding="utf-8"):
-            line = line.strip()
-            if line:
-                target.append(json.loads(line))
+        for kind, target in (("macro_themes", themes), ("runlog", runlog)):
+            path = os.path.join(run_dir, day, f"{kind}_{day}.jsonl")
+            if not os.path.exists(path):
+                continue
+            for line in open(path, encoding="utf-8"):
+                line = line.strip()
+                if line:
+                    target.append(json.loads(line))
     return themes, runlog
 
 
