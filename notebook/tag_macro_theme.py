@@ -195,6 +195,11 @@ def _log_path() -> str:
     return os.path.join(LOG_DIR, f"{stamp}_{SCRIPT_NAME}__{_run_tag()}.txt")
 
 
+def _log_header() -> str:
+    """ログ先頭に残す実行条件。スクリプトごとに中身が変わる。"""
+    return f"model={MODEL_KEY} prompt={PROMPT_VERSION} taxonomy={TAXONOMY_VERSION}"
+
+
 class _Tee:
     """書き込みを元のストリームとファイルの両方へ流す。
 
@@ -288,7 +293,7 @@ class run_logger:
         self._fh = open(self.path, "a", encoding=OUTPUT_ENCODING)
         self._fh.write(
             f"\n===== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"model={MODEL_KEY} prompt={PROMPT_VERSION} taxonomy={TAXONOMY_VERSION} =====\n"
+            f"{_log_header()} =====\n"
         )
         self._fh.flush()
         stderr_on_fd2 = self._stderr_is_fd2()
