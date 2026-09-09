@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -24,7 +25,9 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import traceback
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -52,6 +55,13 @@ MODEL_DRIVE_DIR = ROOT_DIR + "models/"
 PROMPT_DIR = ROOT_DIR + "data/prompts/"
 MODEL_LOCAL_DIR = "/content/models/"
 OUTPUT_ENCODING = "utf-8"
+
+# Colabはセッションが切れると出力が消える。runディレクトリ（Drive上）へ
+# 標準出力と標準エラーを複製し、切断後も経過を追えるようにする。
+LOG_TO_FILE = True
+# llama.cpp はPythonを介さず fd 2 へ直接書くため、sys.stderr の差し替えでは
+# 拾えない。文法エラーやKVキャッシュの警告はそちらに出る。fdごと複製する。
+LOG_CAPTURE_NATIVE_STDERR = True
 
 # JSONLに加えてCSVも出す。付与結果をExcelで読めるようにするため。
 # runlog の raw_output（違反時の生出力）はCSVには載せない。JSONL側で見る。
@@ -167,6 +177,160 @@ def _run_tag() -> str:
 
 def _run_dir() -> str:
     return os.path.join(PRODUCT_DIR, _run_tag())
+
+
+def _log_path() -> str:
+    return os.path.join(_run_dir(), f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+
+
+class _Tee:
+    """書き込みを元のストリームとファイルの両方へ流す。
+
+    切断時に失われないよう毎回flushする。行数は多くないので負荷にならない。
+    """
+
+    def __init__(self, stream: Any, fh: Any) -> None:
+        self._stream = stream
+        self._fh = fh
+
+    def write(self, s: str) -> int:
+        n = self._stream.write(s)
+        try:
+            self._fh.write(s)
+            self._fh.flush()
+        except Exception:
+            pass  # ログが書けなくても本処理は続ける
+        return n
+
+    def flush(self) -> None:
+        self._stream.flush()
+        try:
+            self._fh.flush()
+        except Exception:
+            pass
+
+    def isatty(self) -> bool:
+        return bool(getattr(self._stream, "isatty", lambda: False)())
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
+class run_logger:
+    """標準出力・標準エラーをDrive上のログファイルへ複製する。
+
+    Driveへ直接書く。/content に置くとランタイムが落ちた時点で消え、
+    「切断後に読み返す」というこの機能の目的を果たさないため。
+    """
+
+    def __init__(self, path: Optional[str] = None) -> None:
+        self.path = path
+        self._fh: Any = None
+        self._saved_stdout: Any = None
+        self._saved_stderr: Any = None
+        self._saved_fd2: Optional[int] = None
+        self._pump: Optional[threading.Thread] = None
+
+    @staticmethod
+    def _stderr_is_fd2() -> bool:
+        """sys.stderr の書き込みが fd 2 に届くか。
+
+        素のPythonでは届くので、fd側で捕捉するなら Tee を掛けると二重になる。
+        Jupyter/Colab の sys.stderr は ZMQ 経由で fd 2 を通らないため、
+        その場合は Tee が要る。
+        """
+        try:
+            return sys.stderr.fileno() == 2
+        except Exception:
+            return False
+
+    def _capture_native_stderr(self) -> None:
+        r, w = os.pipe()
+        self._saved_fd2 = os.dup(2)
+        os.dup2(w, 2)
+        os.close(w)
+        saved = self._saved_fd2
+        fh = self._fh
+
+        def pump() -> None:
+            with os.fdopen(r, "rb", 0) as rf:
+                for line in iter(rf.readline, b""):
+                    try:
+                        os.write(saved, line)  # 元の出力先へも流す
+                    except OSError:
+                        pass
+                    try:
+                        fh.write(line.decode("utf-8", "replace"))
+                        fh.flush()
+                    except Exception:
+                        pass
+
+        self._pump = threading.Thread(target=pump, daemon=True)
+        self._pump.start()
+
+    def __enter__(self) -> "run_logger":
+        if not LOG_TO_FILE:
+            return self
+        self.path = self.path or _log_path()
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self._fh = open(self.path, "a", encoding=OUTPUT_ENCODING)
+        self._fh.write(
+            f"\n===== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            f"model={MODEL_KEY} prompt={PROMPT_VERSION} taxonomy={TAXONOMY_VERSION} =====\n"
+        )
+        self._fh.flush()
+        stderr_on_fd2 = self._stderr_is_fd2()
+        self._saved_stdout, self._saved_stderr = sys.stdout, sys.stderr
+        sys.stdout = _Tee(sys.stdout, self._fh)
+        native_ok = False
+        if LOG_CAPTURE_NATIVE_STDERR:
+            try:
+                self._capture_native_stderr()
+                native_ok = True
+            except Exception as e:
+                print(f"[warn] native stderr capture disabled: {type(e).__name__}: {e}")
+        # fd側で拾えていて、かつ sys.stderr がそこへ流れるなら Tee は不要。
+        # 掛けると同じ行が2度記録される。
+        if not (native_ok and stderr_on_fd2):
+            sys.stderr = _Tee(sys.stderr, self._fh)
+        print(f"[info] log: {self.path}")
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        if self._fh is None:
+            return False
+        if exc is not None:
+            # 中断・異常終了の理由を残す。ここが本機能の主目的である。
+            try:
+                self._fh.write(
+                    "\n[error] " + "".join(traceback.format_exception(exc_type, exc, tb))
+                )
+                self._fh.flush()
+            except Exception:
+                pass
+        if self._saved_fd2 is not None:
+            os.dup2(self._saved_fd2, 2)  # パイプの書き端が閉じ、pumpがEOFで抜ける
+            os.close(self._saved_fd2)
+            self._saved_fd2 = None
+            if self._pump is not None:
+                self._pump.join(timeout=5)
+        sys.stdout, sys.stderr = self._saved_stdout, self._saved_stderr
+        try:
+            self._fh.write(f"===== end {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+            self._fh.close()
+        except Exception:
+            pass
+        self._fh = None
+        return False
+
+
+def _with_run_log(fn: Any) -> Any:
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with run_logger():
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 # -----------------------------
@@ -946,6 +1110,7 @@ def load_processed_ids() -> Set[str]:
 # -----------------------------
 # 11) 付与本体
 # -----------------------------
+@_with_run_log
 def tag_all() -> None:
     assert_gpu_available()
     tx = load_taxonomy()
@@ -1195,6 +1360,7 @@ def _load_run_outputs() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     return themes, runlog
 
 
+@_with_run_log
 def report() -> None:
     tx = load_taxonomy()
     theme_rows, runlog = _load_run_outputs()
