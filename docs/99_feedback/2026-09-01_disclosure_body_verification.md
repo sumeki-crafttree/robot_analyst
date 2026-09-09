@@ -133,7 +133,7 @@
 
 - 2026年8月3日〜9月7日の26営業日、TDnet一覧から100社該当236件を特定。
 - 全件のPDFを取得（118.7MB）し、PyMuPDFでテキスト抽出。**抽出失敗0件。**
-- `dim_macro_theme_seed.csv` と `dim_macro_subtheme_seed.csv` の `typical_expressions` から語彙239語を構築し、本文への出現を判定。
+- マクロテーマのマスタ（当時は `dim_macro_theme_seed.csv` と `dim_macro_subtheme_seed.csv` の2本。現在は1本に統合）の `typical_expressions` から語彙239語を構築し、本文への出現を判定。
 - 本文テキストは `data/samples/tdnet_bodies_202608.jsonl`（236件・3.5MB）に保存した。
 
 ### 9.2 結果

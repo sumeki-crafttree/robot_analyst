@@ -28,7 +28,7 @@ import subprocess
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 
 def _ensure_dependency(module_name: str, pip_name: Optional[str] = None) -> None:
@@ -64,8 +64,10 @@ JPX_LISTED_XLS = MASTER_DIR + "jpx_listed_202606.xls"
 COMPANY_SEED_CSV = MASTER_DIR + "dim_company_seed.csv"
 
 OUTPUT_SAMPLE_JSONL = SAMPLE_DIR + "stratified_sample_300.jsonl"
+OUTPUT_SAMPLE_CSV = SAMPLE_DIR + "stratified_sample_300.csv"
 OUTPUT_SUMMARY_CSV = SAMPLE_DIR + "stratified_sample_300_summary.csv"
 OUTPUT_ENCODING = "utf-8"
+CSV_ENCODING = "utf-8-sig"  # BOM付き。Excelで開いたときに日本語が化けないようにする。
 
 SAMPLE_SIZE = 300
 SECTOR_MIN = 15
@@ -502,6 +504,9 @@ def main() -> None:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
+    # 同じ内容をCSVでも出す。抽出結果をExcelで確かめられるようにするため。
+    pd.DataFrame(rows).to_csv(OUTPUT_SAMPLE_CSV, index=False, encoding=CSV_ENCODING)
+
     summary_rows: List[Dict[str, Any]] = []
     by_sector: Counter = Counter(r["jpx_sector_17"] for r in rows)
     by_sector_st: Counter = Counter((r["jpx_sector_17"], r["source_type"]) for r in rows)
@@ -514,10 +519,11 @@ def main() -> None:
     for st in SOURCE_TYPE_TARGET_RATIO:
         total_entry[st] = sum(1 for r in rows if r["source_type"] == st)
     summary_rows.append(total_entry)
-    pd.DataFrame(summary_rows).to_csv(OUTPUT_SUMMARY_CSV, index=False, encoding="utf-8-sig")
+    pd.DataFrame(summary_rows).to_csv(OUTPUT_SUMMARY_CSV, index=False, encoding=CSV_ENCODING)
 
     print("\n[done] stratified sample")
     print(f"[done] sample : {OUTPUT_SAMPLE_JSONL} ({len(rows)} docs)")
+    print(f"[done] sample : {OUTPUT_SAMPLE_CSV}")
     print(f"[done] summary: {OUTPUT_SUMMARY_CSV}")
     print(f"[done] sectors: {len(by_sector)} "
           f"min={min(by_sector.values())} max={max(by_sector.values())}")

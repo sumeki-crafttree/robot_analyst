@@ -114,9 +114,10 @@ Google Colab（無料枠・T4）上で動く2本のPythonスクリプトを実�
   これは必須要件です。
 
 【マスタの読み込み】
-- data/master/dim_macro_theme_seed.csv （L1・16件）
-- data/master/dim_macro_subtheme_seed.csv （L2・85件）
-- どちらもUTF-8 with BOMです。encoding='utf-8-sig' を指定してください。
+- data/master/dim_macro_theme_seed.csv （101行）
+  L1 16件とL2 85件が1ファイルに入っています。level列（L1/L2）で判別してください。
+  L1行のみ definition / includes / excludes を持ち、L2行は空です。
+- UTF-8 with BOMです。encoding='utf-8-sig' を指定してください。
   BOMを除去しないと1列目のカラム名が壊れ、突合が全件失敗します。
 
 ## やらないこと

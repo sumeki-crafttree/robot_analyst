@@ -53,8 +53,7 @@
 │   └── gemma-4-E4B-it-Q4_K_M.gguf
 ├── data/
 │   ├── master/                               ← リポジトリからコピー
-│   │   ├── dim_macro_theme_seed.csv
-│   │   ├── dim_macro_subtheme_seed.csv
+│   │   ├── dim_macro_theme_seed.csv          L1/L2統合・101行
 │   │   ├── dim_company_seed.csv
 │   │   └── jpx_listed_202606.xls
 │   ├── original/

@@ -98,7 +98,7 @@ v0.1の以下の判断は正しいため維持する。
 
 ### 4.1 `macro_theme`（15＋その他）
 
-外部環境で何が起きたかを表す。**2階層とする。** 正本は `data/master/dim_macro_theme_seed.csv`（L1）と `data/master/dim_macro_subtheme_seed.csv`（L2・85件）であり、本節は一覧のみを示す。
+外部環境で何が起きたかを表す。**2階層とする。** 正本は `data/master/dim_macro_theme_seed.csv`（101行）であり、本節は一覧のみを示す。L1とL2は**同一ファイルに `level` 列で保持する**。ファイルを分けるとL1の定義とL2の対応が別管理になり、改定時にずれる。
 
 | コード | 名称 |
 |---|---|
@@ -135,13 +135,15 @@ v0.1の以下の判断は正しいため維持する。
 
 | カラム | 用途 |
 |---|---|
-| `theme_code` / `theme_name` | 識別子と名称 |
+| `level` | `L1` / `L2` の別 |
+| `theme_code` / `subtheme_code` | 識別子。L1行では `subtheme_code` は空 |
+| `name` | 名称 |
 | `definition` | 1文の定義 |
 | `includes` | 含む例。判定の下限を示す |
 | `excludes` | **含まない例。他テーマや他レイヤーとの境界を明示する** |
 | `typical_expressions` | 開示本文での典型表現 |
 
-L2側は `theme_code` / `subtheme_code` / `subtheme_name` / `typical_expressions` を持つ。
+**L2行は `definition` / `includes` / `excludes` を持たない**（空とする）。これらはL1に属する属性であり、L2行に複写すると改定時の不整合を招く。L2行が持つのは `name` と `typical_expressions` である。
 
 - **`excludes` を必須項目とする。** 判定が揺れるのは境界例であり、「何を含むか」より「何を含まないか」のほうが一貫性に効く。たとえば `commodity_price`（国際市況）と `import_price`（日本への伝達段階）、`geopolitics`（情勢）と `trade_policy`（政策手段）、`financial_conditions`（金利）と `asset_price`（資産価格）は、いずれも `excludes` で相互に切り分けている。
 - 1ファクトに複数付与できる。**上限は3件**とする。

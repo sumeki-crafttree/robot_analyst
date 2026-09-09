@@ -151,8 +151,7 @@ TDnet → 原本保存 → テキスト化 → LLMでテーマ付与 → BigQuer
 
 | テーブル | 元ファイル | 件数 |
 |---|---|---|
-| `dim_macro_theme` | `data/master/dim_macro_theme_seed.csv` | 16（L1、`other`含む） |
-| `dim_macro_subtheme` | `data/master/dim_macro_subtheme_seed.csv` | 85（L2） |
+| `dim_macro_theme` | `data/master/dim_macro_theme_seed.csv` | 101（L1 16＋L2 85。`level` 列で判別） |
 | `dim_company` | `data/master/dim_company_seed.csv` | 100 |
 
 CSVは UTF-8 with BOM。**読み込みは `encoding='utf-8-sig'` を指定する。** BOMを除去しないと1列目のカラム名が `﻿company_id` となり、突合が全件失敗する。
@@ -205,8 +204,8 @@ extracted_at        TIMESTAMP
 
 ### 6.2 プロンプトに載せるもの
 
-- `dim_macro_theme` の全16行（`theme_code` / `theme_name` / `definition` / `includes` / `excludes`）
-- `dim_macro_subtheme` の全85行（`theme_code` / `subtheme_code` / `subtheme_name` / `typical_expressions`）
+- L1の全16行（`theme_code` / `name` / `definition` / `includes` / `excludes`）
+- L2の全85行（`theme_code` / `subtheme_code` / `name` / `typical_expressions`）
 - 開示本文（打ち切り済み）
 
 **`excludes` を必ず含める。** 判定が揺れるのは境界例であり、`commodity_price` と `import_price`、`geopolitics` と `trade_policy`、`financial_conditions` と `asset_price` は excludes でしか切り分けられない。
