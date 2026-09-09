@@ -25,3 +25,6 @@ data/report/
 
 # 旧設計の退避先（履歴はローカルのみ保持）
 docs/02_schema/archive/
+
+# 実行ログ（Drive側で生成される。ローカル実行時も追跡しない）
+log/

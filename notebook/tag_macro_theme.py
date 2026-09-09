@@ -52,13 +52,19 @@ PROCESSED_DIR = ROOT_DIR + "data/processed/"
 PRODUCT_DIR = ROOT_DIR + "data/product/"
 SAMPLE_DIR = ROOT_DIR + "data/samples/"
 MODEL_DRIVE_DIR = ROOT_DIR + "models/"
+# ログはプロジェクト直下にまとめる。data/ や models/ と同じ並び。
+# 他のスクリプトもここへ吐けば、実行履歴を1箇所で追える。
+LOG_DIR = ROOT_DIR + "log/"
 PROMPT_DIR = ROOT_DIR + "data/prompts/"
 MODEL_LOCAL_DIR = "/content/models/"
 OUTPUT_ENCODING = "utf-8"
 
-# Colabはセッションが切れると出力が消える。runディレクトリ（Drive上）へ
-# 標準出力と標準エラーを複製し、切断後も経過を追えるようにする。
+# Colabはセッションが切れると出力が消える。LOG_DIR（Drive上）へ標準出力と
+# 標準エラーを複製し、切断後も経過を追えるようにする。
 LOG_TO_FILE = True
+# ログのファイル名に入れる。どのスクリプトの実行かを区別するため。
+# セルに貼り付けると __file__ が無いので定数で持つ。
+SCRIPT_NAME = "tag_macro_theme"
 # llama.cpp はPythonを介さず fd 2 へ直接書くため、sys.stderr の差し替えでは
 # 拾えない。文法エラーやKVキャッシュの警告はそちらに出る。fdごと複製する。
 LOG_CAPTURE_NATIVE_STDERR = True
@@ -180,7 +186,13 @@ def _run_dir() -> str:
 
 
 def _log_path() -> str:
-    return os.path.join(_run_dir(), f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+    """<LOG_DIR>/<日時>_<スクリプト名>__<run_tag>.txt
+
+    日時を先頭に置き、Driveの名前順が実行順になるようにする。
+    run_tag（モデル名とプロンプト版）まで入れて、開かずに区別できるようにする。
+    """
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(LOG_DIR, f"{stamp}_{SCRIPT_NAME}__{_run_tag()}.txt")
 
 
 class _Tee:
