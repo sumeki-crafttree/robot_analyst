@@ -525,8 +525,36 @@ def build_spans(
 #    候補L1ごとに専用のオブジェクト規則を作る。L2の選択肢もL1配下に閉じるため、
 #    「別L1のL2を返す」誤りも文法段階で起きない。
 # -----------------------------
+# GBNFの規則名に使えるのは英数字とハイフンだけである（llama.cpp の is_word_char）。
+# アンダースコアを残すと theme-commodity_price が theme-commodity までしか
+# 名前として読まれず、"error parsing grammar: expecting newline or end at _price"
+# となる。llama.cpp は不正な文法ポインタを返し、推論時にカーネルごと落ちる。
+_GBNF_NAME_RE = re.compile(r"^[A-Za-z0-9-]+$")
+
+
 def _gbnf_rule_name(prefix: str, code: str) -> str:
-    return f"{prefix}-{re.sub(r'[^0-9a-zA-Z_]', '_', code)}"
+    return f"{prefix}-{re.sub(r'[^0-9a-zA-Z]', '-', code)}"
+
+
+def _validate_gbnf(text: str) -> None:
+    """規則名の文字種を検証する。文法エラーはPython側で落とす。
+
+    llama.cpp に不正な文法を渡すとカーネルごと落ちるため、
+    原因の分からないクラッシュにせず、ここで止める。
+    """
+    seen: Dict[str, str] = {}
+    for line in text.splitlines():
+        if "::=" not in line:
+            continue
+        name = line.split("::=", 1)[0].strip()
+        if not _GBNF_NAME_RE.match(name):
+            raise ValueError(
+                f"GBNFの規則名に使えない文字がある: {name!r}。"
+                "使えるのは英数字とハイフンのみ。"
+            )
+        if name in seen:
+            raise ValueError(f"GBNFの規則名が重複している: {name!r}")
+        seen[name] = line
 
 
 def build_grammar(candidate_theme_codes: Sequence[str], tx: Taxonomy) -> str:
@@ -562,7 +590,9 @@ def build_grammar(candidate_theme_codes: Sequence[str], tx: Taxonomy) -> str:
     lines.append('string ::= "\\"" char{0,%d} "\\""' % MAX_EVIDENCE_CHARS_IN_GRAMMAR)
     lines.append(r'char ::= [^"\\\n\r\t] | "\\" ["\\/bfnrt]')
     lines.append("ws ::= [ \\t\\n]*")
-    return "\n".join(lines) + "\n"
+    text = "\n".join(lines) + "\n"
+    _validate_gbnf(text)
+    return text
 
 
 # -----------------------------
