@@ -35,6 +35,7 @@
 |---|---|
 | `notebook/preprocess_disclosures.py` | PDF → 1文書1レコードのJSONL |
 | `notebook/tag_macro_theme.py` | 前処理JSONL → マクロテーマ付与JSONL |
+| `notebook/generate_analyst_message.py` | 前処理JSONL → アナリストメッセージJSONL（03） |
 
 ## 2. 実行環境とDriveレイアウト
 
@@ -100,7 +101,13 @@
 [付与]   notebook/tag_macro_theme.py
           業種とsource_typeで対象を絞り込み、LLMでテーマ付与
           → macro_themes_{yyyymmdd}.jsonl  1テーマ言及1行
+
+[要約]   notebook/generate_analyst_message.py
+          全文書を対象に、本文冒頭からアナリスト向けの1文を生成
+          → analyst_messages_{yyyymmdd}.jsonl  1文書1行
 ```
+
+- **付与と要約は別スクリプトにする。** 対象・入力・出力の粒度が異なるため（03§3）、1つのスクリプトに同居させると名前が実態を表さなくなる。モデルのロードが二重になるが許容する。
 
 ### 3.1 分類は取得段階で確定させる
 
