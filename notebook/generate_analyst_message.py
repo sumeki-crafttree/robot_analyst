@@ -54,9 +54,9 @@ ROOT_DIR = "/content/drive/MyDrive/git/prop_candidates/"
 PROCESSED_DIR = ROOT_DIR + "data/processed/"
 # preprocess_disclosures.py の出力。公開日ごとのフォルダに分かれている。
 PREPROCESSED_DIR = PROCESSED_DIR + "tdnet_pdf_preprocessed_02/"
-# 出力先。<run_tag>/<公開日>/ に分ける。tag_macro_theme.py と同じ階層に置き、
-# analyst_messages_{yyyymmdd}.jsonl として書く。
-MACRO_LABELED_DIR = PROCESSED_DIR + "macro_labeled/"
+# 出力先。<run_tag>/<公開日>/ に分ける。run_tag を上に置くのは、モデルと
+# プロンプト版ごとに結果を丸ごと分けて比較できるようにするためである。
+ANALYST_MESSAGES_DIR = PROCESSED_DIR + "analyst_messages/"
 SAMPLE_DIR = ROOT_DIR + "data/samples/"
 MODEL_DRIVE_DIR = ROOT_DIR + "models/"
 # ログはプロジェクト直下にまとめる。data/ や models/ と同じ並び。
@@ -89,10 +89,6 @@ MESSAGE_PROMPT_VERSION = "analyst_message_v1"
 MESSAGE_CONTEXT_VERSION = "hedge_fund_analyst_v1"
 MESSAGE_PROMPT_PATH = PROMPT_DIR + f"{MESSAGE_PROMPT_VERSION}.txt"
 MESSAGE_CONTEXT_PATH = CONTEXT_DIR + f"{MESSAGE_CONTEXT_VERSION}.md"
-# 出力先の階層 <run_tag>/<公開日>/ を tag_macro_theme.py と揃えるために使う。
-# v1 はマクロテーマ側のプロンプト版であり、メッセージ自体の版ではない。
-PROMPT_VERSION = "v1"
-
 # --- 生成の要件（03§6）---
 # 入力は本文冒頭。適時開示は定型で「記」の直後に理由・内容・日程が並ぶため、
 # 「記」があればその手前から取る。スパン抽出はマクロ語彙に依存するため使えない。
@@ -173,15 +169,15 @@ LLAMA_CPP_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cu124"
 
 
 def _run_tag() -> str:
-    return f"{MODEL_PRESETS[MODEL_KEY]['model_name']}__{PROMPT_VERSION}"
+    return f"{MODEL_PRESETS[MODEL_KEY]['model_name']}__{MESSAGE_PROMPT_VERSION}"
 
 
 def _run_dir() -> str:
-    return os.path.join(MACRO_LABELED_DIR, _run_tag())
+    return os.path.join(ANALYST_MESSAGES_DIR, _run_tag())
 
 
 def _day_dir(day: str) -> str:
-    """公開日ごとの出力フォルダ。<MACRO_LABELED_DIR>/<run_tag>/yyyymmdd/"""
+    """公開日ごとの出力フォルダ。<ANALYST_MESSAGES_DIR>/<run_tag>/yyyymmdd/"""
     return os.path.join(_run_dir(), day)
 
 

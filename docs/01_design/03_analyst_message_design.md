@@ -70,7 +70,17 @@ data/prompts/analyst_message_v1.txt      プロンプトの構造
 
 ## 5. 出力
 
-`fact_disclosure` に文書単位の属性として持つ。
+`fact_disclosure` に文書単位の属性として持つ。出力先はマクロテーマ付与と分ける。
+
+```text
+data/processed/
+├── macro_labeled/{model}__{macro_prompt_version}/{yyyymmdd}/
+│       macro_themes_{yyyymmdd}.jsonl   tag_macro_theme.py
+└── analyst_messages/{model}__{analyst_message_version}/{yyyymmdd}/
+        analyst_messages_{yyyymmdd}.jsonl   generate_analyst_message.py
+```
+
+`run_tag` を日付の上に置くのは、モデルとプロンプト版ごとに結果を丸ごと分けて比較するためである（02§9）。
 
 ```json
 {
