@@ -105,11 +105,14 @@ TDnet → 原本保存 → テキスト化 → LLMでテーマ付与 → BigQuer
 ```
 入力: 対象日付
 1. TDnet一覧を取得（fetch_tdnet_metadata_for_date）
-2. dim_company の company_id で突合、対象外を破棄     ← ダウンロード前
+2. JPXマスタを銘柄コードで突合し、業種・市場商品区分・issuer_kind を付与
 3. source_type を正規表現で判定し、メタデータに付与
-4. PDFを取得し GCS original/dt=YYYY-MM-DD/ へ保存
+4. PDFを取得し GCS original/dt=YYYY-MM-DD/ へ保存（絞り込みをしない）
 5. メタデータを BQ raw.tdnet_metadata へ
 ```
+
+- **取得段階で確定できる分類はすべてここで付与する。** 業種・市場商品区分・`issuer_kind`・`source_type` は銘柄コード／銘柄名／タイトルだけで決定でき、LLMを必要としない。後段で計算し直さない。
+- **企業や業種による絞り込みはここで行わない。** original層は「その日の全開示」という完全な資産にする。絞り込みは extract 段階（4.3）の責務である。対象の定義は今後も変わるため、変えるたびに取得と前処理をやり直す構成にしてはならない。
 
 - 原本は**取得したバイト列のまま**保存する。意味を加えない（05§1）。
 - 保存パスは `original/dt=2026-09-01/{disclosure_id}.pdf`。
@@ -130,7 +133,8 @@ TDnet → 原本保存 → テキスト化 → LLMでテーマ付与 → BigQuer
 ### 4.3 extract（processed層）
 
 ```
-入力: raw層のテキスト、dim_macro_theme、dim_macro_subtheme
+入力: raw層のテキスト、dim_macro_theme
+0. issuer_kind / jpx_sector_17 / source_type で対象を絞り込む
 1. 本文を先頭から一定トークンで打ち切る
 2. LLMを1開示1回呼び、structured output でテーマを取得
 3. schema validation とコード検証（マスタに存在するか）

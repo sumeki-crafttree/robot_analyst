@@ -76,20 +76,78 @@
 - **モデルはDriveに置くが、実行前に `/content` へコピーする。** DriveのI/Oは低速（20〜50MB/s）で、推論中に読み続けると著しく遅い。12Bの4bit量子化で約8GB、コピーに3〜7分かかるがセッション中は一度で済む。
 - 検証用の入力として `data/samples/tdnet_bodies_202608.jsonl`（本文236件）をリポジトリから持ち込めば、**PDF取得を省略して即座にタグ付けの試行に入れる。**
 
-## 3. 全体フロー
+## 3. 全体フローと責務分担
 
 ```
-[取得]  notebook/fetch_tdnet_metadata.py（既存・変更なし）
+[取得]  notebook/fetch_tdnet_metadata.py
+          TDnet一覧 + JPXマスタ突合 → メタデータに分類を確定して付与
           → tdnet_metadata_{yyyymmdd}.csv + PDF
              ↓
-[前処理] notebook/preprocess_disclosures.py（新規）
+[前処理] notebook/preprocess_disclosures.py
+          全文書を対象にPDF→テキスト化（絞り込みをしない）
           → disclosures_{yyyymmdd}.jsonl   1文書1行
              ↓
-[付与]   notebook/tag_macro_theme.py（新規）
+[付与]   notebook/tag_macro_theme.py
+          業種とsource_typeで対象を絞り込み、LLMでテーマ付与
           → macro_themes_{yyyymmdd}.jsonl  1テーマ言及1行
 ```
 
-- 3工程を独立させる。**付与だけを何度も回せることが最重要**である。プロンプトやモデルを変えるたびにPDF取得と前処理をやり直すのは非現実的である。
+### 3.1 分類は取得段階で確定させる
+
+**銘柄コード・銘柄名・タイトルだけで確定できる分類は、すべて取得段階で付与する。** 後段で計算し直さない。
+
+| 付与する項目 | 決定方法 | 精度 |
+|---|---|---|
+| `jpx_sector_17` / `jpx_sector_33` | 銘柄コードで `jpx_listed_202606.xls` を突合 | 決定的 |
+| `jpx_market_segment` | 同上（市場・商品区分） | 決定的 |
+| `issuer_kind` | 市場・商品区分から導出。銘柄名の接頭辞を補助に使う | 決定的 |
+| `source_type` | タイトルの正規表現 | 98.2%（実測） |
+
+- **いずれもLLMを必要としない。** この3段のうちLLMが要るのはマクロテーマ付与だけである。
+- 取得段階で確定させる理由は、**同じ判定を後段で繰り返さないため**である。現状は `source_type` が前処理側で計算され、`jpx_sector_17` はどこでも埋められておらず空のまま流れている。
+
+**`issuer_kind` の導出**
+
+TDnetの銘柄名接頭辞は市場・商品区分に対応する。実測（9,372件）でJPXマスタと100%一致した。
+
+| 接頭辞 | 件数 | JPX市場・商品区分 | `issuer_kind` |
+|---|---|---|---|
+| `Ｅ－` | 189 | ETF・ETN | `etf_etn` |
+| `Ｎ－` | 21 | ETF・ETN | `etf_etn` |
+| `Ｒ－` | 144 | REIT・インフラファンド等 | `reit_fund` |
+| `Ｉ－` | 11 | REIT・インフラファンド等 | `reit_fund` |
+| `Ｇ－` | 1,737 | グロース（内国株式） | `operating_company` |
+| `Ｐ－` | 170 | PRO Market | `operating_company` |
+| なし | 7,077 | プライム・スタンダード他 | `operating_company` |
+
+- **JPXマスタの市場・商品区分を第一の根拠とする。** 接頭辞のない銘柄にもETF・ETNが345件含まれており、接頭辞だけでは取り切れない。
+- **接頭辞は補助として併用する。** JPXマスタに未収載の新規上場銘柄（実測で69件）を拾うためである。
+- 事業会社以外（`etf_etn` / `reit_fund`）は日次基準価額の転記が大半であり、マクロ事象の報告ではない。
+
+### 3.2 前処理は全文書に対して行う
+
+- **絞り込みをしない。** その日の全開示をテキスト化する。
+- 判断根拠は2つある。第一に、**対象の定義を変えるたびに前処理をやり直すのは無駄である。** 業種を広げる、`source_type` を変える、といった変更は今後も起きる。テキスト化済みの資産があれば、付与だけを回し直せばよい。
+- 第二に、**Driveは2TBあり容量制約がない。** 前処理の所要時間（日次27分）も許容範囲である。
+- 前処理の出力は「その日の全開示のテキスト」という完全な資産になる。ここに欠落を作らない。
+
+### 3.3 絞り込みは付与段階で行う
+
+- **費用が発生する場所で絞る。** LLM呼び出しだけが従量であり、そこで初めて対象を限定する。
+- 絞り込み条件は設定として外に出し、コードに埋め込まない。
+
+```text
+TARGET_ISSUER_KINDS  = ["operating_company"]        # ETF・REITを除く
+TARGET_SECTORS_17    = []                            # 空なら全業種
+TARGET_SOURCE_TYPES  = ["timely_disclosure", "forecast_revision",
+                        "earnings", "earnings_presentation"]
+```
+
+- 条件を変えて再実行するのが試行の基本操作になる。**前処理をやり直さずに対象を変えられることが、この分割の目的である。**
+
+### 3.4 工程の独立性
+
+3工程を独立させる。**付与だけを何度も回せることが最重要**である。プロンプトやモデルを変えるたびにPDF取得と前処理をやり直すのは非現実的である。
 
 ## 4. preprocess_disclosures.py
 
@@ -122,6 +180,10 @@
   "company_name": "井関農機",
   "title": "固定資産の譲渡および特別利益の計上に関するお知らせ",
   "source_type": "timely_disclosure",
+  "issuer_kind": "operating_company",
+  "jpx_sector_17": "機械",
+  "jpx_sector_33": "機械",
+  "jpx_market_segment": "プライム（内国株式）",
   "document_url": "https://...",
   "pdf_sha256": "...",
   "page_count": 2,
@@ -154,8 +216,10 @@
 ### 4.4 追加する処理
 
 - **暗号化PDFの復号。** `cryptography` を依存に追加する。TDnetにはAES暗号化PDFが混じり、これがないとテキスト抽出が失敗する。
-- **`source_type` の判定。** タイトルの正規表現で `timely_disclosure` / `earnings` / `earnings_presentation` / `forecast_revision` を付与する。
+- **`source_type` と業種の判定は行わない。** これらは取得段階で確定済みであり（3.1）、メタデータCSVから読み取って出力へ転記するだけとする。前処理側で計算し直さない。
+- メタデータに `source_type` や `jpx_sector_17` が欠けている場合は、**エラーとして扱う。** 空文字で流すと、付与段階の絞り込みが黙って全件通過または全件除外になる。
 - スキャンPDF（`pdf_layout_type = "scan"`）は `status = "skipped_scan"` として本文を空にする。OCRは行わない。
+- **ETF・REITを含む全文書を処理する。** 除外は付与段階の責務である（3.2）。
 
 ## 5. tag_macro_theme.py
 
@@ -164,6 +228,8 @@
 ```
 disclosures_{yyyymmdd}.jsonl
     ↓
+[0] 対象の絞り込み：issuer_kind / jpx_sector_17 / source_type（3.3）
+    ↓  対象外 → 出力しない（処理していないことが分かる状態にする）
 [1] ゲート：マスタ語彙239語で本文を照合
     ↓  1語も無い → themes=[] で確定、LLMを呼ばない
 [2] 候補L1の絞り込み：ヒットした語が属するL1のみを候補とする

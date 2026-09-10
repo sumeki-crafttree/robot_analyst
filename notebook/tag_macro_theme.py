@@ -99,6 +99,20 @@ END_DATE = "2026-09-07"
 
 MAX_DOCUMENTS: Optional[int] = None
 
+# --- 対象の絞り込み（02§3.3）---
+# 費用が発生するのはLLM呼び出しだけである。そこで初めて対象を限定する。
+# 前処理は全文書に対して済んでいるので、ここを変えれば前処理をやり直さずに
+# 対象を変えられる。条件はコードに埋め込まず、この3つで指定する。
+# いずれも空リストなら、その項目では絞らない。
+TARGET_ISSUER_KINDS: List[str] = ["operating_company"]  # ETF・REITを除く
+TARGET_SECTORS_17: List[str] = []  # 空なら全業種
+TARGET_SOURCE_TYPES: List[str] = [
+    "timely_disclosure",
+    "forecast_revision",
+    "earnings",
+    "earnings_presentation",
+]
+
 # --- モデル（02§6）---
 # E4B は 12B と同じインターフェースで差し替えられる。速度比較のため。
 # GGUFは MODEL_DRIVE_DIR の直下に置く。取得元と手順は下記のとおり。
@@ -1147,6 +1161,57 @@ def load_processed_ids() -> Set[str]:
 # -----------------------------
 # 11) 付与本体
 # -----------------------------
+def select_targets(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """LLM呼び出しの前に対象を絞る（02§3.3）。
+
+    対象外は出力しない。「テーマが付かなかった」ことと「そもそも処理して
+    いない」ことは別であり、出力に混ぜると区別できなくなるためである。
+    """
+    # (文書の項目名, 設定の定数名, 許可値)
+    rules = (
+        ("issuer_kind", "TARGET_ISSUER_KINDS", TARGET_ISSUER_KINDS),
+        ("jpx_sector_17", "TARGET_SECTORS_17", TARGET_SECTORS_17),
+        ("source_type", "TARGET_SOURCE_TYPES", TARGET_SOURCE_TYPES),
+    )
+    active = [(field, setting, set(allowed)) for field, setting, allowed in rules if allowed]
+    if not active:
+        print(f"[info] targets: {len(docs)} (絞り込み条件が未設定のため全件)")
+        return docs
+
+    for field, setting, _ in active:
+        if any(field not in d for d in docs):
+            raise ValueError(
+                f"documents are missing '{field}'. 前処理の出力が古い。\n"
+                "  fetch_tdnet_metadata.py を FETCH_MODE='annotate' で流し、\n"
+                "  preprocess_disclosures.py を実行し直すこと（02§3.1）。\n"
+                f"  絞り込まない場合は {setting} を空にすること。"
+            )
+
+    kept: List[Dict[str, Any]] = []
+    excluded: Counter = Counter()
+    for doc in docs:
+        reason = ""
+        for field, _setting, allowed in active:
+            value = str(doc.get(field, "") or "")
+            if value not in allowed:
+                reason = f"{field}={value or '(空)'}"
+                break
+        if reason:
+            excluded[reason] += 1
+        else:
+            kept.append(doc)
+
+    print(f"[info] targets: {len(kept)} / {len(docs)} (excluded={len(docs) - len(kept)})")
+    for reason, count in excluded.most_common():
+        print(f"[info]   excluded {reason}: {count}")
+    if not kept:
+        raise RuntimeError(
+            "対象が0件。TARGET_ISSUER_KINDS / TARGET_SECTORS_17 / "
+            "TARGET_SOURCE_TYPES を確認すること。"
+        )
+    return kept
+
+
 @_with_run_log
 def tag_all() -> None:
     assert_gpu_available()
@@ -1154,7 +1219,7 @@ def tag_all() -> None:
     template = load_prompt_template()
     os.makedirs(_run_dir(), exist_ok=True)
 
-    docs = load_documents()
+    docs = select_targets(load_documents())
     docs.sort(key=lambda d: (_date_to_compact(d.get("disclosure_date", "")), str(d.get("code", ""))))
     if MAX_DOCUMENTS is not None and MAX_DOCUMENTS > 0:
         docs = docs[:MAX_DOCUMENTS]

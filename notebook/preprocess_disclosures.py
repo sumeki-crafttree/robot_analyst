@@ -191,29 +191,42 @@ def _date_range_inclusive(start_date: str, end_date: str) -> List[str]:
 
 
 # -----------------------------
-# 2) source_type 判定（02§4.4）
-#    build_sample.py と同一の実装。ラベル付き236件に対し236/236一致。
+# 2) 分類はメタデータから受け取る（02§3.1）
+#    source_type / jpx_* / issuer_kind は fetch_tdnet_metadata.py が確定させる。
+#    ここで計算し直さない。欠けていれば落とす。空文字で流すと、後段の
+#    絞り込みが黙って全件通過または全件除外になり、気づけないため。
 # -----------------------------
-SOURCE_TYPE_RULES: Sequence[Tuple[str, str]] = (
-    (
-        "earnings_presentation",
-        r"決算(補足説明資料|補足資料|説明資料|説明会資料|説明会|プレゼンテーション)"
-        r"|(決算|業績)説明(会)?(資料|プレゼン)",
-    ),
-    ("earnings", r"決算短信"),
-    (
-        "forecast_revision",
-        r"(業績|配当|通期|連結)?.{0,12}予想.{0,8}(修正|変更)|業績予想と実績値との差異",
-    ),
+# メタデータCSVに必須の分類列。列そのものが無ければ落とす。
+REQUIRED_CLASSIFICATION_FIELDS: Sequence[str] = (
+    "jpx_sector_17",
+    "jpx_sector_33",
+    "jpx_market_segment",
+    "issuer_kind",
+    "source_type",
 )
+# 行ごとに必ず値が入る列。JPXマスタ未収載の銘柄でも導出できる。
+# jpx_* は未収載だと空になり得るため、ここには含めない。
+REQUIRED_CLASSIFICATION_VALUES: Sequence[str] = ("issuer_kind", "source_type")
 
 
-def classify_source_type(title: str) -> str:
-    txt = str(title or "")
-    for source_type, pattern in SOURCE_TYPE_RULES:
-        if re.search(pattern, txt):
-            return source_type
-    return "timely_disclosure"
+def _validate_classification(df: "pd.DataFrame", path: str) -> None:
+    missing = [c for c in REQUIRED_CLASSIFICATION_FIELDS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"metadata is missing classification columns {missing}: {path}\n"
+            "fetch_tdnet_metadata.py を FETCH_MODE='annotate' で流し直すこと（02§3.1）。"
+        )
+    for col in REQUIRED_CLASSIFICATION_VALUES:
+        empty = int((df[col].astype(str).str.strip() == "").sum())
+        if empty:
+            raise ValueError(
+                f"metadata has {empty} empty {col} values: {path}\n"
+                "fetch_tdnet_metadata.py を FETCH_MODE='annotate' で流し直すこと。"
+            )
+    unlisted = int((df["jpx_market_segment"].astype(str).str.strip() == "").sum())
+    if unlisted:
+        # JPXマスタ未収載（新規上場等）。issuer_kind は銘柄名接頭辞で補われている。
+        print(f"[warn] {unlisted} rows are not in the JPX master (jpx_* are empty): {path}")
 
 
 # -----------------------------
@@ -340,8 +353,11 @@ def process_one_pdf(meta: Dict[str, Any], pdf_path: str) -> Dict[str, Any]:
         "code": issuer_code,
         "company_name": str(meta.get("company_name", "") or ""),
         "title": title,
-        "source_type": str(meta.get("source_type", "") or "") or classify_source_type(title),
+        "source_type": str(meta.get("source_type", "") or ""),
         "jpx_sector_17": str(meta.get("jpx_sector_17", "") or ""),
+        "jpx_sector_33": str(meta.get("jpx_sector_33", "") or ""),
+        "jpx_market_segment": str(meta.get("jpx_market_segment", "") or ""),
+        "issuer_kind": str(meta.get("issuer_kind", "") or ""),
         "document_url": str(meta.get("document_url", "") or ""),
         "pdf_sha256": sha256_hex,
         "page_count": 0,
@@ -581,9 +597,9 @@ def load_targets() -> List[Dict[str, Any]]:
         df = pd.read_csv(
             os.path.join(METADATA_DIR, f"tdnet_metadata_{day}.csv"), dtype=str, encoding="utf-8-sig"
         ).fillna("")
+        _validate_classification(df, os.path.join(METADATA_DIR, f"tdnet_metadata_{day}.csv"))
         for _, row in df.iterrows():
             meta = {k: str(v) for k, v in row.to_dict().items()}
-            meta["source_type"] = classify_source_type(meta.get("title", ""))
             key = _source_key(meta)
             if key in seen_keys:
                 duplicates += 1
@@ -668,6 +684,9 @@ CSV_BASE_FIELDS: Sequence[str] = (
     "title",
     "source_type",
     "jpx_sector_17",
+    "jpx_sector_33",
+    "jpx_market_segment",
+    "issuer_kind",
     "document_url",
     "pdf_sha256",
     "page_count",
@@ -933,9 +952,11 @@ def main() -> None:
                     "code": str(meta.get("code", "")),
                     "company_name": str(meta.get("company_name", "")),
                     "title": str(meta.get("title", "")),
-                    "source_type": str(meta.get("source_type", ""))
-                    or classify_source_type(str(meta.get("title", ""))),
+                    "source_type": str(meta.get("source_type", "")),
                     "jpx_sector_17": str(meta.get("jpx_sector_17", "")),
+                    "jpx_sector_33": str(meta.get("jpx_sector_33", "")),
+                    "jpx_market_segment": str(meta.get("jpx_market_segment", "")),
+                    "issuer_kind": str(meta.get("issuer_kind", "")),
                     "document_url": str(meta.get("document_url", "")),
                     "pdf_sha256": str(meta.get("pdf_sha256", "")),
                     "page_count": 0,
@@ -961,9 +982,11 @@ def main() -> None:
                         "code": str(meta.get("code", "")),
                         "company_name": str(meta.get("company_name", "")),
                         "title": str(meta.get("title", "")),
-                        "source_type": str(meta.get("source_type", ""))
-                        or classify_source_type(str(meta.get("title", ""))),
+                        "source_type": str(meta.get("source_type", "")),
                         "jpx_sector_17": str(meta.get("jpx_sector_17", "")),
+                        "jpx_sector_33": str(meta.get("jpx_sector_33", "")),
+                        "jpx_market_segment": str(meta.get("jpx_market_segment", "")),
+                        "issuer_kind": str(meta.get("issuer_kind", "")),
                         "document_url": str(meta.get("document_url", "")),
                         "pdf_sha256": str(meta.get("pdf_sha256", "")),
                         "page_count": 0,

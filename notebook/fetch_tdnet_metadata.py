@@ -10,14 +10,18 @@
 #   - DataFrameを表示し、CSV保存
 # ==========================================
 
+import functools
 import os
 import re
+import threading
 import time
 import subprocess
 import sys
 import hashlib
+import traceback
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from collections import Counter
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urljoin, urlparse
 
 
@@ -32,6 +36,7 @@ def _ensure_dependency(module_name: str, pip_name: Optional[str] = None) -> None
 _ensure_dependency("requests")
 _ensure_dependency("bs4", "beautifulsoup4")
 _ensure_dependency("pandas")
+_ensure_dependency("xlrd")  # JPXマスタ（.xls）を読むため
 
 import pandas as pd
 import requests
@@ -42,7 +47,10 @@ from bs4 import BeautifulSoup
 # 0) 設定（ここだけ編集すればOK）
 # -----------------------------
 # "single" なら TARGET_DATE、"range" なら START_DATE/END_DATE を使用
-FETCH_MODE = "single"  # single | range
+# single | range | annotate
+#   annotate は既存の日次CSVを読み直して分類5項目を付け直すだけ。
+#   TDnetにも取りに行かず、PDFにも触らない。分類ロジックを変えた時に使う。
+FETCH_MODE = "single"
 TARGET_DATE = "2026-05-20"  # YYYY-MM-DD
 START_DATE = "2026-05-19"  # YYYY-MM-DD
 END_DATE = "2026-05-20"  # YYYY-MM-DD
@@ -51,11 +59,25 @@ ROOT_DIR = "/content/drive/MyDrive/git/prop_candidates/"
 ORIGINAL_DIR = ROOT_DIR + "data/original/"
 OUTPUT_CSV = ORIGINAL_DIR + f"tdnet_metadata_{TARGET_DATE.replace('-', '')}.csv"
 RAW_DIR = ROOT_DIR + "data/raw/"
+MASTER_DIR = ROOT_DIR + "data/master/"
+# 銘柄コードで突合して業種・市場区分を確定させる（02§3.1）
+JPX_LISTED_XLS = MASTER_DIR + "jpx_listed_202606.xls"
 PROCESSED_DIR = ROOT_DIR + "data/processed/"
 MERGED_OUTPUT_CSV = PROCESSED_DIR + "tdnet_metadata_all_merged.csv"
 PDF_OUTPUT_DIR = RAW_DIR + "tdnet_pdfs/"
 
 OUTPUT_ENCODING = "utf-8-sig"
+
+# ログはプロジェクト直下にまとめる。data/ や models/ と同じ並び。
+LOG_DIR = ROOT_DIR + "log/"
+# Colabはセッションが切れると出力が消える。LOG_DIR（Drive上）へ標準出力と
+# 標準エラーを複製し、切断後も経過を追えるようにする。
+LOG_TO_FILE = True
+# requests や外部プロセスは fd 2 へ直接書くため、sys.stderr の差し替えでは
+# 拾えない。fdごと複製する。
+LOG_CAPTURE_NATIVE_STDERR = True
+# ログのファイル名に入れる。セルに貼り付けると __file__ が無いので定数で持つ。
+SCRIPT_NAME = "fetch_tdnet_metadata"
 REQUEST_TIMEOUT = 30
 REQUEST_INTERVAL_SEC = 0.2
 MAX_RETRIES = 3
@@ -68,6 +90,317 @@ PDF_DOWNLOAD_SLEEP_SEC = 0.15
 SKIP_PDF_IF_EXISTS = True
 
 TDNET_BASE = "https://www.release.tdnet.info/inbs/"
+
+
+# -----------------------------
+# 分類の確定（02§3.1）
+#   銘柄コード・銘柄名・タイトルだけで決まる分類は、すべてここで付与する。
+#   後段で計算し直さない。いずれもLLMを必要としない。
+# -----------------------------
+# source_type の判定。preprocess_disclosures.py から移設した（02§4.4）。
+# 実測98.2%。上から順に評価し、最初に一致したものを採る。
+SOURCE_TYPE_RULES: Sequence[Tuple[str, str]] = (
+    (
+        "earnings_presentation",
+        r"決算(補足説明資料|補足資料|説明資料|説明会資料|説明会|プレゼンテーション)"
+        r"|(決算|業績)説明(会)?(資料|プレゼン)",
+    ),
+    ("earnings", r"決算短信"),
+    (
+        "forecast_revision",
+        r"(業績|配当|通期|連結)?.{0,12}予想.{0,8}(修正|変更)|業績予想と実績値との差異",
+    ),
+)
+
+# JPXマスタの市場・商品区分から issuer_kind を決める。これが第一の根拠。
+MARKET_SEGMENT_TO_ISSUER_KIND: Dict[str, str] = {
+    "ETF・ETN": "etf_etn",
+    "REIT・ベンチャーファンド・カントリーファンド・インフラファンド": "reit_fund",
+}
+# JPXマスタ未収載の銘柄（新規上場等・実測69件）を銘柄名の接頭辞で補う。
+# 接頭辞のない銘柄にもETF・ETNが345件あるため、接頭辞だけでは取り切れない。
+COMPANY_NAME_PREFIX_TO_ISSUER_KIND: Sequence[Tuple[str, str]] = (
+    ("Ｅ－", "etf_etn"),
+    ("Ｎ－", "etf_etn"),
+    ("Ｒ－", "reit_fund"),
+    ("Ｉ－", "reit_fund"),
+)
+DEFAULT_ISSUER_KIND = "operating_company"
+
+# 付与する分類列。preprocess / tag はこれが埋まっている前提で動く。
+CLASSIFICATION_FIELDS: Sequence[str] = (
+    "jpx_sector_17",
+    "jpx_sector_33",
+    "jpx_market_segment",
+    "issuer_kind",
+    "source_type",
+)
+
+
+def classify_source_type(title: str) -> str:
+    txt = str(title or "")
+    for source_type, pattern in SOURCE_TYPE_RULES:
+        if re.search(pattern, txt):
+            return source_type
+    return "timely_disclosure"
+
+
+def _jpx_key(code: Any) -> str:
+    """TDnetの銘柄コードをJPXマスタのコードに合わせる。
+
+    TDnetは5桁（末尾に1桁付く）、JPXマスタは4桁である。133A0 のような
+    英数字コードがあるため、末尾0の除去ではなく先頭4文字を採る。
+    """
+    return str(code or "").strip()[:4]
+
+
+def load_jpx_master() -> Dict[str, Dict[str, str]]:
+    """コード（4桁）→ 業種・市場区分。"""
+    if not os.path.exists(JPX_LISTED_XLS):
+        raise FileNotFoundError(
+            f"JPX master not found: {JPX_LISTED_XLS}\n"
+            "data/master/jpx_listed_202606.xls をDriveへ配置すること。"
+        )
+    df = pd.read_excel(JPX_LISTED_XLS, dtype=str).fillna("")
+    required = ("コード", "銘柄名", "市場・商品区分", "17業種区分", "33業種区分")
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"JPX master is missing columns: {missing} in {JPX_LISTED_XLS}")
+    master: Dict[str, Dict[str, str]] = {}
+    for _, row in df.iterrows():
+        master[str(row["コード"]).strip()] = {
+            "jpx_sector_17": str(row["17業種区分"]).strip(),
+            "jpx_sector_33": str(row["33業種区分"]).strip(),
+            "jpx_market_segment": str(row["市場・商品区分"]).strip(),
+        }
+    print(f"[info] jpx master: {len(master)} codes from {JPX_LISTED_XLS}")
+    return master
+
+
+def derive_issuer_kind(market_segment: str, company_name: str) -> str:
+    """市場・商品区分を第一の根拠とし、未収載は銘柄名の接頭辞で補う。"""
+    segment = str(market_segment or "").strip()
+    if segment:
+        return MARKET_SEGMENT_TO_ISSUER_KIND.get(segment, DEFAULT_ISSUER_KIND)
+    name = str(company_name or "")
+    for prefix, kind in COMPANY_NAME_PREFIX_TO_ISSUER_KIND:
+        if name.startswith(prefix):
+            return kind
+    return DEFAULT_ISSUER_KIND
+
+
+def annotate_classification(df: "pd.DataFrame", master: Optional[Dict[str, Dict[str, str]]] = None):
+    """メタデータへ分類5項目を付与する。既存の列があっても上書きする。"""
+    if df.empty:
+        for field in CLASSIFICATION_FIELDS:
+            if field not in df.columns:
+                df[field] = []
+        return df
+    if master is None:
+        master = load_jpx_master()
+
+    sector_17: List[str] = []
+    sector_33: List[str] = []
+    segments: List[str] = []
+    kinds: List[str] = []
+    source_types: List[str] = []
+    unlisted = 0
+    for _, row in df.iterrows():
+        entry = master.get(_jpx_key(row.get("code", "")))
+        if entry is None:
+            entry = {"jpx_sector_17": "", "jpx_sector_33": "", "jpx_market_segment": ""}
+            unlisted += 1
+        sector_17.append(entry["jpx_sector_17"])
+        sector_33.append(entry["jpx_sector_33"])
+        segments.append(entry["jpx_market_segment"])
+        kinds.append(derive_issuer_kind(entry["jpx_market_segment"], row.get("company_name", "")))
+        source_types.append(classify_source_type(row.get("title", "")))
+
+    df["jpx_sector_17"] = sector_17
+    df["jpx_sector_33"] = sector_33
+    df["jpx_market_segment"] = segments
+    df["issuer_kind"] = kinds
+    df["source_type"] = source_types
+
+    kind_counts = Counter(kinds)
+    print(
+        f"[info] classified {len(df)} rows: "
+        + " ".join(f"{k}={v}" for k, v in sorted(kind_counts.items()))
+        + f" jpx_unlisted={unlisted}"
+    )
+    print("[info] source_type: " + " ".join(f"{k}={v}" for k, v in sorted(Counter(source_types).items())))
+    return df
+
+
+class _Tee:
+    """書き込みを元のストリームとファイルの両方へ流す。
+
+    切断時に失われないよう毎回flushする。行数は多くないので負荷にならない。
+    """
+
+    def __init__(self, stream: Any, fh: Any) -> None:
+        self._stream = stream
+        self._fh = fh
+
+    def write(self, s: str) -> int:
+        n = self._stream.write(s)
+        try:
+            self._fh.write(s)
+            self._fh.flush()
+        except Exception:
+            pass  # ログが書けなくても本処理は続ける
+        return n
+
+    def flush(self) -> None:
+        self._stream.flush()
+        try:
+            self._fh.flush()
+        except Exception:
+            pass
+
+    def isatty(self) -> bool:
+        return bool(getattr(self._stream, "isatty", lambda: False)())
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
+class run_logger:
+    """標準出力・標準エラーをDrive上のログファイルへ複製する。
+
+    Driveへ直接書く。/content に置くとランタイムが落ちた時点で消え、
+    「切断後に読み返す」というこの機能の目的を果たさないため。
+    """
+
+    def __init__(self, path: Optional[str] = None) -> None:
+        self.path = path
+        self._fh: Any = None
+        self._saved_stdout: Any = None
+        self._saved_stderr: Any = None
+        self._saved_fd2: Optional[int] = None
+        self._pump: Optional[threading.Thread] = None
+
+    @staticmethod
+    def _stderr_is_fd2() -> bool:
+        """sys.stderr の書き込みが fd 2 に届くか。
+
+        素のPythonでは届くので、fd側で捕捉するなら Tee を掛けると二重になる。
+        Jupyter/Colab の sys.stderr は ZMQ 経由で fd 2 を通らないため、
+        その場合は Tee が要る。
+        """
+        try:
+            return sys.stderr.fileno() == 2
+        except Exception:
+            return False
+
+    def _capture_native_stderr(self) -> None:
+        r, w = os.pipe()
+        self._saved_fd2 = os.dup(2)
+        os.dup2(w, 2)
+        os.close(w)
+        saved = self._saved_fd2
+        fh = self._fh
+
+        def pump() -> None:
+            with os.fdopen(r, "rb", 0) as rf:
+                for line in iter(rf.readline, b""):
+                    try:
+                        os.write(saved, line)  # 元の出力先へも流す
+                    except OSError:
+                        pass
+                    try:
+                        fh.write(line.decode("utf-8", "replace"))
+                        fh.flush()
+                    except Exception:
+                        pass
+
+        self._pump = threading.Thread(target=pump, daemon=True)
+        self._pump.start()
+
+    def __enter__(self) -> "run_logger":
+        if not LOG_TO_FILE:
+            return self
+        self.path = self.path or _log_path()
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self._fh = open(self.path, "a", encoding=OUTPUT_ENCODING)
+        self._fh.write(
+            f"\n===== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            f"{_log_header()} =====\n"
+        )
+        self._fh.flush()
+        stderr_on_fd2 = self._stderr_is_fd2()
+        self._saved_stdout, self._saved_stderr = sys.stdout, sys.stderr
+        sys.stdout = _Tee(sys.stdout, self._fh)
+        native_ok = False
+        if LOG_CAPTURE_NATIVE_STDERR:
+            try:
+                self._capture_native_stderr()
+                native_ok = True
+            except Exception as e:
+                print(f"[warn] native stderr capture disabled: {type(e).__name__}: {e}")
+        # fd側で拾えていて、かつ sys.stderr がそこへ流れるなら Tee は不要。
+        # 掛けると同じ行が2度記録される。
+        if not (native_ok and stderr_on_fd2):
+            sys.stderr = _Tee(sys.stderr, self._fh)
+        print(f"[info] log: {self.path}")
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        if self._fh is None:
+            return False
+        if exc is not None:
+            # 中断・異常終了の理由を残す。ここが本機能の主目的である。
+            try:
+                self._fh.write(
+                    "\n[error] " + "".join(traceback.format_exception(exc_type, exc, tb))
+                )
+                self._fh.flush()
+            except Exception:
+                pass
+        if self._saved_fd2 is not None:
+            os.dup2(self._saved_fd2, 2)  # パイプの書き端が閉じ、pumpがEOFで抜ける
+            os.close(self._saved_fd2)
+            self._saved_fd2 = None
+            if self._pump is not None:
+                self._pump.join(timeout=5)
+        sys.stdout, sys.stderr = self._saved_stdout, self._saved_stderr
+        try:
+            self._fh.write(f"===== end {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+            self._fh.close()
+        except Exception:
+            pass
+        self._fh = None
+        return False
+
+
+def _with_run_log(fn: Any) -> Any:
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with run_logger():
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _log_path() -> str:
+    """<LOG_DIR>/<日時>_<スクリプト名>.txt
+
+    日時を先頭に置き、Driveの名前順が実行順になるようにする。
+    """
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(LOG_DIR, f"{stamp}_{SCRIPT_NAME}.txt")
+
+
+def _log_header() -> str:
+    """ログ先頭に残す実行条件。あとから同じ実行を再現できる情報を残す。"""
+    if FETCH_MODE == "single":
+        span = TARGET_DATE
+    else:
+        span = f"{START_DATE}..{END_DATE}"
+    return (
+        f"mode={FETCH_MODE} dates={span} download_pdfs={DOWNLOAD_PDFS} "
+        f"merge_all={MERGE_ALL_EXISTING_DAILIES} out={ORIGINAL_DIR}"
+    )
 
 
 def _normalize_target_date(value: str) -> Tuple[str, str]:
@@ -417,13 +750,50 @@ def download_pdfs_for_date(df: pd.DataFrame, target_date: str) -> pd.DataFrame:
     return out
 
 
+def _annotate_existing_dailies(master: Dict[str, Dict[str, str]]) -> List[str]:
+    """既存の日次CSVを読み直し、分類5項目を付け直して保存する。
+
+    TDnetへの取得もPDFのダウンロードも行わない。分類ロジックを変えたときに
+    メタデータだけを作り直すための経路である（02§3.1）。
+    """
+    if not os.path.exists(ORIGINAL_DIR):
+        raise FileNotFoundError(f"metadata dir not found: {ORIGINAL_DIR}")
+    pattern = re.compile(r"^tdnet_metadata_(\d{8})\.csv$")
+    days = sorted(m.group(1) for m in (pattern.match(n) for n in os.listdir(ORIGINAL_DIR)) if m)
+    if START_DATE and END_DATE:
+        allowed = {d.replace("-", "") for d in _date_range_inclusive(START_DATE, END_DATE)}
+        days = [d for d in days if d in allowed]
+        print(f"[info] annotate range: {START_DATE}..{END_DATE}")
+    else:
+        print("[info] annotate: all existing dailies (START_DATE/END_DATE 未設定)")
+    if not days:
+        raise RuntimeError(f"no tdnet_metadata_yyyymmdd.csv to annotate under: {ORIGINAL_DIR}")
+
+    saved: List[str] = []
+    for day in days:
+        path = os.path.join(ORIGINAL_DIR, f"tdnet_metadata_{day}.csv")
+        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig").fillna("")
+        print(f"[info] annotate {day}: {len(df)} rows")
+        df = annotate_classification(df, master)
+        df.to_csv(path, index=False, encoding=OUTPUT_ENCODING)
+        saved.append(path)
+        print(f"[done] saved: {path} (encoding={OUTPUT_ENCODING})")
+    return saved
+
+
+@_with_run_log
 def main() -> None:
     saved_files: List[str] = []
     failed_dates: List[str] = []
+    # 分類はコード突合とタイトル正規表現だけで決まる。LLMは要らない（02§3.1）。
+    jpx_master = load_jpx_master()
 
-    if FETCH_MODE == "single":
+    if FETCH_MODE == "annotate":
+        saved_files = _annotate_existing_dailies(jpx_master)
+    elif FETCH_MODE == "single":
         print(f"[info] fetch mode: single ({TARGET_DATE})")
         df = fetch_tdnet_metadata_for_date(TARGET_DATE)
+        df = annotate_classification(df, jpx_master)
         if DOWNLOAD_PDFS:
             df = download_pdfs_for_date(df, TARGET_DATE)
         output_csv = _save_daily_output(df, TARGET_DATE, OUTPUT_ENCODING)
@@ -437,6 +807,7 @@ def main() -> None:
             print(f"\n[info] target date: {d}")
             try:
                 day_df = fetch_tdnet_metadata_for_date(d)
+                day_df = annotate_classification(day_df, jpx_master)
                 if DOWNLOAD_PDFS:
                     day_df = download_pdfs_for_date(day_df, d)
                 output_csv = _save_daily_output(day_df, d, OUTPUT_ENCODING)
@@ -447,7 +818,7 @@ def main() -> None:
                 failed_dates.append(d)
                 print(f"[warn] failed date={d}: {e}")
     else:
-        raise ValueError("FETCH_MODE must be 'single' or 'range'")
+        raise ValueError("FETCH_MODE must be 'single', 'range' or 'annotate'")
 
     if MERGE_ALL_EXISTING_DAILIES:
         os.makedirs(PROCESSED_DIR, exist_ok=True)
@@ -469,11 +840,13 @@ def main() -> None:
     if not preview_df.empty:
         display_cols = [
             "disclosure_date",
-            "disclosure_time",
             "code",
             "company_name",
+            "issuer_kind",
+            "jpx_market_segment",
+            "jpx_sector_17",
+            "source_type",
             "title",
-            "document_url",
         ]
         show_cols = [c for c in display_cols if c in preview_df.columns]
         print("\n[preview]")
