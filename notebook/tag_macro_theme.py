@@ -113,6 +113,27 @@ TARGET_SOURCE_TYPES: List[str] = [
     "earnings_presentation",
 ]
 
+# --- アナリストメッセージ（設計03）---
+# テーマ付与とは対象も入力も異なるため別パスとする。--with-message で有効。
+# 付けなければ既存の挙動のまま、この経路は一切動かない。
+WITH_MESSAGE = False
+CONTEXT_DIR = ROOT_DIR + "data/context/"
+MESSAGE_PROMPT_VERSION = "analyst_message_v1"
+MESSAGE_CONTEXT_VERSION = "hedge_fund_analyst_v1"
+MESSAGE_PROMPT_PATH = PROMPT_DIR + f"{MESSAGE_PROMPT_VERSION}.txt"
+MESSAGE_CONTEXT_PATH = CONTEXT_DIR + f"{MESSAGE_CONTEXT_VERSION}.md"
+# 入力は本文冒頭（03§6.1）。スパン抽出はマクロ語彙に依存するため使えない。
+MESSAGE_BODY_CHARS = 2000
+MESSAGE_LEAD_CHARS = 200  # 「記」の手前から何字さかのぼるか
+MESSAGE_MIN_CHARS = 40
+MESSAGE_MAX_CHARS = 80
+MESSAGE_GRAMMAR_MAX_CHARS = 160  # 文法上の上限。40〜80字はプロンプトで指示する
+MESSAGE_MAX_OUTPUT_TOKENS = 256
+# メッセージが成立しないもの（03§6.4）。日次基準価額の転記であるため。
+MESSAGE_SKIP_ISSUER_KINDS: List[str] = ["etf_etn", "reit_fund"]
+MESSAGE_MATERIALITY_VALUES: List[str] = ["high", "medium", "low", "none"]
+MESSAGE_SAMPLES_PER_MATERIALITY = 5  # 目視確認用に materiality 別で書き出す件数
+
 # --- モデル（02§6）---
 # E4B は 12B と同じインターフェースで差し替えられる。速度比較のため。
 # GGUFは MODEL_DRIVE_DIR の直下に置く。取得元と手順は下記のとおり。
@@ -966,7 +987,9 @@ def load_llm(model_path: str):
     )
 
 
-def generate_json(llm, prompt: str, grammar_text: str) -> str:
+def generate_json(
+    llm, prompt: str, grammar_text: str, max_tokens: Optional[int] = None
+) -> str:
     from llama_cpp import LlamaGrammar  # type: ignore
 
     grammar = LlamaGrammar.from_string(grammar_text, verbose=False)
@@ -974,7 +997,7 @@ def generate_json(llm, prompt: str, grammar_text: str) -> str:
         prompt=GEMMA_TURN_TEMPLATE.format(prompt=prompt),
         grammar=grammar,
         temperature=TEMPERATURE,
-        max_tokens=MAX_OUTPUT_TOKENS,
+        max_tokens=MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens,
         stop=["<end_of_turn>"],
     )
     return out["choices"][0]["text"]
@@ -1212,6 +1235,392 @@ def select_targets(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return kept
 
 
+# -----------------------------
+# 12) アナリストメッセージ（設計03）
+#     テーマ付与とは対象も入力も異なるため、同一コールに統合せず別パスとする。
+#     ゲートは適用しない。マクロ要因を含まない開示にもメッセージの価値がある。
+# -----------------------------
+def load_message_prompt_template() -> str:
+    if not os.path.exists(MESSAGE_PROMPT_PATH):
+        raise FileNotFoundError(
+            f"message prompt not found: {MESSAGE_PROMPT_PATH}\n"
+            f"リポジトリの data/prompts/{MESSAGE_PROMPT_VERSION}.txt を"
+            f" {PROMPT_DIR} へアップロードすること。"
+        )
+    print(f"[info] message prompt : {MESSAGE_PROMPT_PATH}")
+    with open(MESSAGE_PROMPT_PATH, encoding="utf-8") as f:
+        return f.read()
+
+
+def load_analyst_context() -> str:
+    """読み手の定義と品質基準。プロンプトへ実行時に差し込む（03§4）。
+
+    読み手を切り替える場合はこのファイルを差し替える。プロンプトは変えない。
+    """
+    if not os.path.exists(MESSAGE_CONTEXT_PATH):
+        raise FileNotFoundError(
+            f"analyst context not found: {MESSAGE_CONTEXT_PATH}\n"
+            f"リポジトリの data/context/{MESSAGE_CONTEXT_VERSION}.md を"
+            f" {CONTEXT_DIR} へアップロードすること。"
+        )
+    print(f"[info] message context: {MESSAGE_CONTEXT_PATH}")
+    with open(MESSAGE_CONTEXT_PATH, encoding="utf-8") as f:
+        return f.read()
+
+
+def message_body_excerpt(text: str) -> str:
+    """本文の冒頭を切り出す（03§6.1）。
+
+    適時開示は定型で「記」の直後に理由・内容・日程が並ぶ。「記」があれば
+    その手前から始め、無ければ先頭から MESSAGE_BODY_CHARS 字を取る。
+    """
+    body = str(text or "").strip()
+    if not body:
+        return ""
+    head = body[: MESSAGE_BODY_CHARS * 2]
+    match = re.search(r"(?:^|\n)\s*記\s*(?:\n|$)", head)
+    if match:
+        start = max(0, match.start() - MESSAGE_LEAD_CHARS)
+        return body[start : start + MESSAGE_BODY_CHARS]
+    return body[:MESSAGE_BODY_CHARS]
+
+
+def render_message_prompt(template: str, context: str, doc: Dict[str, Any], body: str) -> str:
+    out = template
+    for key, value in (
+        ("{{ANALYST_CONTEXT}}", context),
+        ("{{COMPANY_NAME}}", str(doc.get("company_name", "") or "")),
+        ("{{JPX_SECTOR_17}}", str(doc.get("jpx_sector_17", "") or "")),
+        ("{{SOURCE_TYPE}}", str(doc.get("source_type", "") or "")),
+        ("{{DOCUMENT_TITLE}}", str(doc.get("title", "") or "")),
+        ("{{BODY}}", body),
+        ("{{MIN_CHARS}}", str(MESSAGE_MIN_CHARS)),
+        ("{{MAX_CHARS}}", str(MESSAGE_MAX_CHARS)),
+    ):
+        out = out.replace(key, value)
+    return out
+
+
+def build_message_grammar() -> str:
+    """1文書1行のメッセージ用。既存のテーマ用文法とは別物である。
+
+    規則名に使えるのは英数字とハイフンのみ（_validate_gbnf）。
+    """
+    alts = " | ".join('"\\"%s\\""' % v for v in MESSAGE_MATERIALITY_VALUES)
+    lines = [
+        'root ::= "{" ws "\\"analyst_message\\"" ws ":" ws msg ws ","'
+        ' ws "\\"message_materiality\\"" ws ":" ws materiality ws "}"',
+        'msg ::= "\\"" msgchar{1,%d} "\\""' % MESSAGE_GRAMMAR_MAX_CHARS,
+        r'msgchar ::= [^"\\\n\r\t] | "\\" ["\\/bfnrt]',
+        "materiality ::= " + alts,
+        "ws ::= [ \\t\\n]*",
+    ]
+    text = "\n".join(lines) + "\n"
+    _validate_gbnf(text)
+    return text
+
+
+# --- 数値の検証（03§6.3）-------------------------------------------------
+# アナリスト向けにおいて、誤った数値は無いことより悪い。生成後に機械的に
+# 検証する。表記ゆれ（61億円 と 6,100百万円）を吸収するため正規化して比べる。
+_SCALE_UNITS: Dict[str, int] = {"兆": 10 ** 12, "億": 10 ** 8, "百万": 10 ** 6, "万": 10 ** 4, "千": 10 ** 3}
+_SCALE_ALT = "|".join(_SCALE_UNITS)
+_NUM = r"\d[\d,]*(?:\.\d+)?"
+# 「1億2,000万円」のような連鎖を1つの量として拾う
+_QUANTITY_RE = re.compile(
+    rf"((?:{_NUM}\s*(?:{_SCALE_ALT})\s*)*{_NUM}\s*(?:{_SCALE_ALT})?)\s*(円|株)"
+)
+_PERCENT_RE = re.compile(rf"({_NUM})\s*(?:%|パーセント)")
+# 期は「1Q」「第1四半期」「1Q」の表記ゆれを同じ類として扱う
+_PERIOD_RE = re.compile(rf"(?:第)?({_NUM})\s*(?:Q|四半期)")
+_DATE_RE = re.compile(rf"({_NUM})\s*(年|月|日)")
+_BARE_RE = re.compile(rf"({_NUM})\s*(倍|ポイント|件|名|人|回|拠点|店)")
+
+
+def _to_number(raw: str) -> Optional[float]:
+    try:
+        return float(raw.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _quantity_value(chunk: str) -> Optional[float]:
+    """「1億2,000万」→ 120000000。単位の連鎖を足し合わせる。"""
+    total = 0.0
+    found = False
+    for num, scale in re.findall(rf"({_NUM})\s*({_SCALE_ALT})?", chunk):
+        value = _to_number(num)
+        if value is None:
+            continue
+        total += value * (_SCALE_UNITS.get(scale, 1) if scale else 1)
+        found = True
+    return total if found else None
+
+
+def number_tokens(text: str) -> Set[str]:
+    """比較用に正規化した数値表現の集合を返す。"""
+    src = _normalize_text(text)
+    tokens: Set[str] = set()
+    for chunk, unit in _QUANTITY_RE.findall(src):
+        value = _quantity_value(chunk)
+        if value is not None:
+            tokens.add(f"{'money' if unit == '円' else 'share'}:{value:.4g}")
+    for pattern, label in ((_PERCENT_RE, "pct"), (_PERIOD_RE, "period")):
+        for num in pattern.findall(src):
+            value = _to_number(num)
+            if value is not None:
+                tokens.add(f"{label}:{value:.4g}")
+    for num, unit in _DATE_RE.findall(src):
+        value = _to_number(num)
+        if value is not None:
+            tokens.add(f"{unit}:{value:.4g}")
+    for num, unit in _BARE_RE.findall(src):
+        value = _to_number(num)
+        if value is not None:
+            tokens.add(f"{unit}:{value:.4g}")
+    return tokens
+
+
+def verify_message_numbers(message: str, source_text: str) -> Tuple[bool, List[str]]:
+    """メッセージ中の数値がすべて原文に存在するか。"""
+    in_message = number_tokens(message)
+    if not in_message:
+        return True, []  # 数値を含まないメッセージは検証対象がない
+    in_source = number_tokens(source_text)
+    missing = sorted(in_message - in_source)
+    return not missing, missing
+
+
+# --- 生成 ---------------------------------------------------------------
+def _messages_path(day: str) -> str:
+    return os.path.join(_day_dir(day), f"analyst_messages_{day}.jsonl")
+
+
+def _messages_csv_path(day: str) -> str:
+    return os.path.join(_day_dir(day), f"analyst_messages_{day}.csv")
+
+
+MESSAGE_CSV_FIELDS: Sequence[str] = (
+    "document_id",
+    "disclosure_date",
+    "code",
+    "company_name",
+    "title",
+    "source_type",
+    "jpx_sector_17",
+    "issuer_kind",
+    "analyst_message",
+    "message_materiality",
+    "message_numbers_verified",
+    "message_char_count",
+    "message_title_overlap",
+    "message_regenerated",
+    "message_model",
+    "prompt_version",
+    "context_version",
+    "elapsed_sec",
+    "status",
+    "error",
+)
+
+
+def load_processed_message_ids() -> Set[str]:
+    """再開用。処理済みの document_id を集める（02§8.3）。"""
+    done: Set[str] = set()
+    run_dir = _run_dir()
+    if not os.path.exists(run_dir):
+        return done
+    for day in sorted(os.listdir(run_dir)):
+        path = os.path.join(run_dir, day, f"analyst_messages_{day}.jsonl")
+        if not re.match(r"^\d{8}$", day) or not os.path.exists(path):
+            continue
+        for line in open(path, encoding="utf-8"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                done.add(json.loads(line)["document_id"])
+            except Exception:
+                continue
+    return done
+
+
+def select_message_targets(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """メッセージ生成の対象（03§3・§6.4）。
+
+    ゲートも source_type も業種も見ない。全文書が対象である。除くのは
+    メッセージが成立しないものだけ。
+    """
+    kept: List[Dict[str, Any]] = []
+    excluded: Counter = Counter()
+    for doc in docs:
+        kind = str(doc.get("issuer_kind", "") or "")
+        if kind in MESSAGE_SKIP_ISSUER_KINDS:
+            excluded[f"issuer_kind={kind}"] += 1
+            continue
+        if not message_body_excerpt(doc.get("text", "")):
+            excluded["empty_body"] += 1
+            continue
+        kept.append(doc)
+    print(f"[info] message targets: {len(kept)} / {len(docs)} (excluded={len(docs) - len(kept)})")
+    for reason, count in excluded.most_common():
+        print(f"[info]   excluded {reason}: {count}")
+    return kept
+
+
+def _title_overlap(message: str, title: str) -> float:
+    """タイトルの言い換えかどうかの目安。文字bigramのJaccard係数。"""
+    def bigrams(value: str) -> Set[str]:
+        v = re.sub(r"\s+", "", _normalize_text(value))
+        return {v[i : i + 2] for i in range(len(v) - 1)}
+
+    a, b = bigrams(message), bigrams(title)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def generate_analyst_message(
+    llm: Any, doc: Dict[str, Any], template: str, context: str, grammar_text: str
+) -> Dict[str, Any]:
+    """1文書1件のメッセージを作る。数値が原文になければ1回だけ作り直す。"""
+    body = message_body_excerpt(doc.get("text", ""))
+    prompt = render_message_prompt(template, context, doc, body)
+    source_text = str(doc.get("text", "") or "")
+
+    message = ""
+    materiality = ""
+    verified = False
+    missing: List[str] = []
+    regenerated = False
+    error = ""
+
+    for attempt in range(2):
+        try:
+            raw = generate_json(
+                llm, prompt, grammar_text, max_tokens=MESSAGE_MAX_OUTPUT_TOKENS
+            )
+            parsed = json.loads(raw)
+            message = str(parsed.get("analyst_message", "") or "").strip()
+            materiality = str(parsed.get("message_materiality", "") or "").strip()
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+            break
+
+        verified, missing = verify_message_numbers(message, source_text)
+        if verified:
+            break
+        if attempt == 0:
+            # 原文にない数値が含まれている。1回だけ作り直す（03§6.3）。
+            regenerated = True
+
+    return {
+        "analyst_message": message,
+        "message_materiality": materiality,
+        "message_numbers_verified": verified,
+        "message_numbers_missing": missing,
+        "message_char_count": len(message),
+        "message_title_overlap": round(_title_overlap(message, str(doc.get("title", ""))), 3),
+        "message_regenerated": regenerated,
+        "error": error,
+    }
+
+
+def run_message_pass(docs: List[Dict[str, Any]], llm: Any) -> Any:
+    """アナリストメッセージを生成する（設計03）。
+
+    テーマ付与と同じ実行内で回す。モデルのロードに3〜7分かかるため、
+    プロセスを分けない（03§3）。llm が未ロードならここで読む。
+    """
+    template = load_message_prompt_template()
+    context = load_analyst_context()
+    grammar_text = build_message_grammar()
+
+    targets = select_message_targets(docs)
+    if MAX_DOCUMENTS is not None and MAX_DOCUMENTS > 0:
+        targets = targets[:MAX_DOCUMENTS]
+    processed = load_processed_message_ids()
+    print(f"[info] messages already processed: {len(processed)} / {len(targets)}")
+
+    model_name = MODEL_PRESETS[MODEL_KEY]["model_name"]
+    handles: Dict[str, Any] = {}
+    csv_handles: Dict[str, Any] = {}
+    csv_writers: Dict[str, Any] = {}
+    counters: Counter = Counter()
+    started = time.time()
+
+    try:
+        for n, doc in enumerate(targets, 1):
+            document_id = str(doc.get("document_id", ""))
+            if document_id in processed:
+                counters["skipped_done"] += 1
+                continue
+
+            day = _date_to_compact(doc.get("disclosure_date", ""))
+            if day not in handles:
+                os.makedirs(_day_dir(day), exist_ok=True)
+                handles[day] = open(_messages_path(day), "a", encoding=OUTPUT_ENCODING)
+                if WRITE_CSV:
+                    csv_handles[day], csv_writers[day] = open_csv_appender(
+                        _messages_csv_path(day), MESSAGE_CSV_FIELDS
+                    )
+
+            if llm is None:
+                llm = load_llm(stage_model())
+
+            doc_started = time.time()
+            result = generate_analyst_message(llm, doc, template, context, grammar_text)
+            elapsed = time.time() - doc_started
+
+            row = {
+                "document_id": document_id,
+                "disclosure_date": str(doc.get("disclosure_date", "")),
+                "code": str(doc.get("code", "")),
+                "company_name": str(doc.get("company_name", "")),
+                "title": str(doc.get("title", "")),
+                "source_type": str(doc.get("source_type", "")),
+                "jpx_sector_17": str(doc.get("jpx_sector_17", "")),
+                "issuer_kind": str(doc.get("issuer_kind", "")),
+                "message_model": model_name,
+                "prompt_version": MESSAGE_PROMPT_VERSION,
+                "context_version": MESSAGE_CONTEXT_VERSION,
+                "elapsed_sec": round(elapsed, 3),
+                "status": "failed" if result["error"] else "ok",
+                "processed_at_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                **result,
+            }
+            handles[day].write(json.dumps(row, ensure_ascii=False) + "\n")
+            handles[day].flush()
+            if WRITE_CSV:
+                csv_writers[day].writerow(_flatten_for_csv(row, MESSAGE_CSV_FIELDS))
+                csv_handles[day].flush()
+            processed.add(document_id)
+
+            counters[row["status"]] += 1
+            if not result["message_numbers_verified"]:
+                counters["numbers_unverified"] += 1
+            if result["message_regenerated"]:
+                counters["regenerated"] += 1
+            counters[f"materiality_{result['message_materiality'] or 'blank'}"] += 1
+
+            total_elapsed = time.time() - started
+            eta = (total_elapsed / n) * (len(targets) - n)
+            print(
+                f"[msg {n}/{len(targets)}] {document_id} "
+                f"mat={result['message_materiality']} chars={result['message_char_count']} "
+                f"num_ok={result['message_numbers_verified']} "
+                f"{elapsed:.1f}s eta={eta / 60:.1f}min"
+            )
+    finally:
+        for f in list(handles.values()) + list(csv_handles.values()):
+            f.close()
+
+    print("\n[done] analyst messages finished")
+    print(f"[done] counters: {dict(counters)}")
+    print(f"[done] elapsed : {(time.time() - started) / 60:.1f} min")
+    return llm
+
+
 @_with_run_log
 def tag_all() -> None:
     assert_gpu_available()
@@ -1219,7 +1628,8 @@ def tag_all() -> None:
     template = load_prompt_template()
     os.makedirs(_run_dir(), exist_ok=True)
 
-    docs = select_targets(load_documents())
+    all_docs = load_documents()
+    docs = select_targets(all_docs)
     docs.sort(key=lambda d: (_date_to_compact(d.get("disclosure_date", "")), str(d.get("code", ""))))
     if MAX_DOCUMENTS is not None and MAX_DOCUMENTS > 0:
         docs = docs[:MAX_DOCUMENTS]
@@ -1435,6 +1845,10 @@ def tag_all() -> None:
     print(f"[done] output  : {_run_dir()}")
     print(f"[done] elapsed : {(time.time() - started) / 60:.1f} min")
 
+    if WITH_MESSAGE:
+        # 対象はテーマ付与の絞り込み前の全文書。ゲートも適用しない（03§3）。
+        run_message_pass(all_docs, llm)
+
 
 # -----------------------------
 # 12) レポート（02§9 受入基準）
@@ -1462,6 +1876,120 @@ def _load_run_outputs() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
                 if line:
                     target.append(json.loads(line))
     return themes, runlog
+
+
+def _load_message_outputs() -> List[Dict[str, Any]]:
+    run_dir = _run_dir()
+    rows: List[Dict[str, Any]] = []
+    if not os.path.exists(run_dir):
+        return rows
+    days = allowed_days()
+    for day in sorted(os.listdir(run_dir)):
+        if not re.match(r"^\d{8}$", day):
+            continue
+        if days is not None and day not in days:
+            continue
+        path = os.path.join(run_dir, day, f"analyst_messages_{day}.jsonl")
+        if not os.path.exists(path):
+            continue
+        for line in open(path, encoding="utf-8"):
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def message_report() -> None:
+    """受入基準の数値を出す（03§8）。数値だけでは測れないため目視用も書く。"""
+    rows = _load_message_outputs()
+    if not rows:
+        print("[info] no analyst messages found. --with-message を付けて実行すること。")
+        return
+
+    ok = [r for r in rows if r.get("status") == "ok" and r.get("analyst_message")]
+    total = len(rows)
+    unverified = [r for r in ok if not r.get("message_numbers_verified")]
+    lengths = [int(r.get("message_char_count") or 0) for r in ok]
+    in_range = [n for n in lengths if MESSAGE_MIN_CHARS <= n <= MESSAGE_MAX_CHARS]
+    overlaps = [float(r.get("message_title_overlap") or 0.0) for r in ok]
+    elapsed = [float(r.get("elapsed_sec") or 0.0) for r in rows]
+    materiality = Counter(str(r.get("message_materiality") or "blank") for r in ok)
+
+    def pct(part: int, whole: int) -> float:
+        return round(part / whole * 100, 1) if whole else 0.0
+
+    def quantiles(values: List[float]) -> Dict[str, float]:
+        if not values:
+            return {}
+        ordered = sorted(values)
+        def q(p: float) -> float:
+            return round(ordered[min(len(ordered) - 1, int(p * len(ordered)))], 2)
+        return {"min": round(ordered[0], 2), "p25": q(0.25), "median": q(0.5),
+                "p75": q(0.75), "max": round(ordered[-1], 2)}
+
+    summary = {
+        "run_tag": _run_tag(),
+        "model": MODEL_PRESETS[MODEL_KEY]["model_name"],
+        "prompt_version": MESSAGE_PROMPT_VERSION,
+        "context_version": MESSAGE_CONTEXT_VERSION,
+        "documents": total,
+        "generated": len(ok),
+        "failed": total - len(ok),
+        "numbers_unverified": len(unverified),
+        "numbers_unverified_pct": pct(len(unverified), len(ok)),
+        "regenerated": sum(1 for r in ok if r.get("message_regenerated")),
+        "materiality": dict(materiality),
+        "materiality_pct": {k: pct(v, len(ok)) for k, v in materiality.items()},
+        "char_count": quantiles([float(n) for n in lengths]),
+        "char_count_in_range_pct": pct(len(in_range), len(ok)),
+        "title_overlap": quantiles(overlaps),
+        "title_overlap_over_50pct": pct(sum(1 for v in overlaps if v >= 0.5), len(ok)),
+        "elapsed_sec_per_document": quantiles(elapsed),
+    }
+
+    print("\n===== analyst message report =====")
+    print(f"documents={total} generated={len(ok)} failed={total - len(ok)}")
+    print(f"numbers_unverified: {len(unverified)} ({summary['numbers_unverified_pct']}%)"
+          f" / regenerated: {summary['regenerated']}")
+    print(f"materiality: {summary['materiality_pct']}")
+    print(f"char_count: {summary['char_count']} in {MESSAGE_MIN_CHARS}-{MESSAGE_MAX_CHARS}"
+          f"字: {summary['char_count_in_range_pct']}%")
+    print(f"title_overlap: {summary['title_overlap']}"
+          f" (>=0.5 は {summary['title_overlap_over_50pct']}%)")
+    print(f"elapsed_sec/doc: {summary['elapsed_sec_per_document']}")
+
+    report_path = os.path.join(_run_dir(), f"message_report_{_run_tag()}.json")
+    with open(report_path, "w", encoding=OUTPUT_ENCODING) as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    print(f"[done] message metrics: {report_path}")
+
+    # 目視用。数値だけでは品質を測れない（03§8）。
+    sample_path = os.path.join(_run_dir(), f"message_samples_{_run_tag()}.md")
+    with open(sample_path, "w", encoding=OUTPUT_ENCODING) as f:
+        f.write(f"# アナリストメッセージ 目視確認\n\n")
+        f.write(f"- model: {summary['model']}\n- prompt: {MESSAGE_PROMPT_VERSION}\n")
+        f.write(f"- context: {MESSAGE_CONTEXT_VERSION}\n\n")
+        f.write("確認する点\n\n")
+        f.write("- タイトルを言い換えただけになっていないか\n")
+        f.write("- 本文にない解釈を足していないか\n")
+        f.write("- 「影響は軽微」を無理に意味のある話にしていないか\n\n")
+        for value in MESSAGE_MATERIALITY_VALUES:
+            picked = [r for r in ok if r.get("message_materiality") == value][:MESSAGE_SAMPLES_PER_MATERIALITY]
+            f.write(f"\n## {value}（{materiality.get(value, 0)}件中 {len(picked)}件）\n\n")
+            if not picked:
+                f.write("該当なし\n")
+                continue
+            for r in picked:
+                f.write(f"### {r.get('company_name')}（{r.get('code')}）\n\n")
+                f.write(f"- タイトル: {r.get('title')}\n")
+                f.write(f"- メッセージ: **{r.get('analyst_message')}**\n")
+                f.write(f"- 文字数: {r.get('message_char_count')} / "
+                        f"タイトル重複: {r.get('message_title_overlap')} / "
+                        f"数値検証: {r.get('message_numbers_verified')}")
+                if r.get("message_numbers_missing"):
+                    f.write(f" (原文に無い数値: {r['message_numbers_missing']})")
+                f.write("\n\n")
+    print(f"[done] message samples: {sample_path}")
 
 
 @_with_run_log
@@ -1691,14 +2219,22 @@ def report() -> None:
                 w.writerow(row)
         print(f"[done] samples: {sample_csv_path}")
 
+    # アナリストメッセージが出ていれば、その受入基準も出す（03§8）。
+    message_report()
+
 
 # -----------------------------
 # 13) main
 # -----------------------------
 def main() -> None:
+    global WITH_MESSAGE
+    args = sys.argv[1:]
+    if "--with-message" in args:
+        WITH_MESSAGE = True
+        args = [a for a in args if a != "--with-message"]
     mode = MODE
-    if len(sys.argv) > 1 and sys.argv[1] in ("tag", "report"):
-        mode = sys.argv[1]
+    if args and args[0] in ("tag", "report"):
+        mode = args[0]
     if mode == "report":
         report()
     else:
