@@ -48,121 +48,83 @@ def _ensure_dependency(module_name: str, pip_name: Optional[str] = None) -> None
 # -----------------------------
 # 0) 設定（ここだけ編集すればOK）
 # -----------------------------
-MODE = "generate"  # generate | report
+MODE = "generate"  # "generate" | "report"
 
 ROOT_DIR = "/content/drive/MyDrive/git/prop_candidates/"
-
-
 PROCESSED_DIR = ROOT_DIR + "data/processed/"
-
-
+# preprocess_disclosures.py の出力。公開日ごとのフォルダに分かれている。
 PREPROCESSED_DIR = PROCESSED_DIR + "tdnet_pdf_preprocessed_02/"
-
-
+# 出力先。<run_tag>/<公開日>/ に分ける。tag_macro_theme.py と同じ階層に置き、
+# analyst_messages_{yyyymmdd}.jsonl として書く。
 MACRO_LABELED_DIR = PROCESSED_DIR + "macro_labeled/"
-
-
 SAMPLE_DIR = ROOT_DIR + "data/samples/"
-
-
 MODEL_DRIVE_DIR = ROOT_DIR + "models/"
-
-
+# ログはプロジェクト直下にまとめる。data/ や models/ と同じ並び。
+# 他のスクリプトもここへ吐けば、実行履歴を1箇所で追える。
 LOG_DIR = ROOT_DIR + "log/"
-
-
 PROMPT_DIR = ROOT_DIR + "data/prompts/"
-
-
+CONTEXT_DIR = ROOT_DIR + "data/context/"
 MODEL_LOCAL_DIR = "/content/models/"
-
-
 OUTPUT_ENCODING = "utf-8"
 
-
+# Colabはセッションが切れると出力が消える。LOG_DIR（Drive上）へ標準出力と
+# 標準エラーを複製し、切断後も経過を追えるようにする。
 LOG_TO_FILE = True
-
-
+# ログのファイル名に入れる。どのスクリプトの実行かを区別するため。
+# セルに貼り付けると __file__ が無いので定数で持つ。
 SCRIPT_NAME = "generate_analyst_message"
-
-
+# llama.cpp はPythonを介さず fd 2 へ直接書くため、sys.stderr の差し替えでは
+# 拾えない。文法エラーやKVキャッシュの警告はそちらに出る。fdごと複製する。
 LOG_CAPTURE_NATIVE_STDERR = True
 
-
+# JSONLに加えてCSVも出す。生成結果をExcelで読めるようにするため。
 WRITE_CSV = True
-
-
 CSV_ENCODING = "utf-8-sig"  # BOM付き。Excelで開いたときに日本語が化けないようにする。
 
-
-
-
-# 出力先の階層 <run_tag>/<公開日>/ をテーマ付与と揃えるために使う。
-# 分離の前後で出力パスを変えないためであり、v1 はマクロテーマ側の版を指す。
-# メッセージ自体の版は MESSAGE_PROMPT_VERSION に記録される。
+# --- プロンプトとコンテキスト（03§4）---
+# プロンプトは構造だけを持ち、「何を重視するか」はコンテキスト文書に置く。
+# 読み手を経営企画部に切り替える場合は、コンテキストを差し替えるだけでよい。
+# どちらを変えて結果が変わったかを切り分けるため、両方を出力に記録する。
+MESSAGE_PROMPT_VERSION = "analyst_message_v1"
+MESSAGE_CONTEXT_VERSION = "hedge_fund_analyst_v1"
+MESSAGE_PROMPT_PATH = PROMPT_DIR + f"{MESSAGE_PROMPT_VERSION}.txt"
+MESSAGE_CONTEXT_PATH = CONTEXT_DIR + f"{MESSAGE_CONTEXT_VERSION}.md"
+# 出力先の階層 <run_tag>/<公開日>/ を tag_macro_theme.py と揃えるために使う。
+# v1 はマクロテーマ側のプロンプト版であり、メッセージ自体の版ではない。
 PROMPT_VERSION = "v1"
 
+# --- 生成の要件（03§6）---
+# 入力は本文冒頭。適時開示は定型で「記」の直後に理由・内容・日程が並ぶため、
+# 「記」があればその手前から取る。スパン抽出はマクロ語彙に依存するため使えない。
+MESSAGE_BODY_CHARS = 2000
+MESSAGE_LEAD_CHARS = 200  # 「記」の手前から何字さかのぼるか
+MESSAGE_MIN_CHARS = 40
+MESSAGE_MAX_CHARS = 80
+MESSAGE_GRAMMAR_MAX_CHARS = 160  # 文法上の上限。40〜80字はプロンプトで指示する
+MESSAGE_MAX_OUTPUT_TOKENS = 256
+# メッセージが成立しないもの（03§6.4）。日次基準価額の転記であるため。
+MESSAGE_SKIP_ISSUER_KINDS: List[str] = ["etf_etn", "reit_fund"]
+MESSAGE_MATERIALITY_VALUES: List[str] = ["high", "medium", "low", "none"]
+MESSAGE_SAMPLES_PER_MATERIALITY = 5  # 目視確認用に materiality 別で書き出す件数
 
+# 入力。前処理JSONLが第一候補。
+# 前処理を待たずにプロンプトを試すときは USE_BODIES_SAMPLE=True にする。
+# その場合 data/samples/tdnet_bodies_202608.jsonl（本文236件）を直接読む。
 USE_BODIES_SAMPLE = False
-
-
 BODIES_SAMPLE_JSONL = SAMPLE_DIR + "tdnet_bodies_202608.jsonl"
 
-
+# 処理する日付の範囲。両方空なら全期間。preprocess_disclosures.py と同じ書式。
+# generate と report の両方に効く。日単位のファイル名で絞るため、範囲外の日は
+# 読み込みもしない。
 START_DATE = "2026-09-07"  # YYYY-MM-DD または YYYYMMDD
-
-
 END_DATE = "2026-09-07"
-
 
 MAX_DOCUMENTS: Optional[int] = None
 
-
-CONTEXT_DIR = ROOT_DIR + "data/context/"
-
-
-MESSAGE_PROMPT_VERSION = "analyst_message_v1"
-
-
-MESSAGE_CONTEXT_VERSION = "hedge_fund_analyst_v1"
-
-
-MESSAGE_PROMPT_PATH = PROMPT_DIR + f"{MESSAGE_PROMPT_VERSION}.txt"
-
-
-MESSAGE_CONTEXT_PATH = CONTEXT_DIR + f"{MESSAGE_CONTEXT_VERSION}.md"
-
-
-MESSAGE_BODY_CHARS = 2000
-
-
-MESSAGE_LEAD_CHARS = 200  # 「記」の手前から何字さかのぼるか
-
-
-MESSAGE_MIN_CHARS = 40
-
-
-MESSAGE_MAX_CHARS = 80
-
-
-MESSAGE_GRAMMAR_MAX_CHARS = 160  # 文法上の上限。40〜80字はプロンプトで指示する
-
-
-MESSAGE_MAX_OUTPUT_TOKENS = 256
-
-
-MESSAGE_SKIP_ISSUER_KINDS: List[str] = ["etf_etn", "reit_fund"]
-
-
-MESSAGE_MATERIALITY_VALUES: List[str] = ["high", "medium", "low", "none"]
-
-
-MESSAGE_SAMPLES_PER_MATERIALITY = 5  # 目視確認用に materiality 別で書き出す件数
-
-
+# --- モデル（02§6）---
+# tag_macro_theme.py と同じ構成にしてある。LLM実行部の重複は意図的であり、
+# 共通モジュール化しない（03§3）。単体でColabに貼り付けて動く形を保つため。
 MODEL_KEY = "12b_ud"
-
-
 MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
     # 本命。unsloth/gemma-4-12b-it-GGUF
     "12b_ud": {
@@ -195,22 +157,18 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-
+# T4はbfloat16にもFlash Attention 2にも非対応。llama.cppのGGUFはfp16/量子化で
+# 動くためこの制約に抵触しないが、n_gpu_layers=-1 で全層GPUに載せる前提である。
 N_GPU_LAYERS = -1
-
-
+# 実行の冒頭でGPUの有無を確かめる。CPUランタイムのままだと llama_cpp の import が
+# 「libcudart.so.12 が無い」という分かりにくい形で落ちるため、
+# モデルを7GB落とす前にここで止める。
 REQUIRE_GPU = True
-
-
 N_BATCH = 512
-
-
 MAX_OUTPUT_TOKENS = 512
-
-
 TEMPERATURE = 0.0  # 再現性のため（01§6.1）
 
-
+# Colab向け。CUDA版のprebuilt wheelを先に試し、失敗したら通常のpipへ落とす。
 LLAMA_CPP_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cu124"
 
 
@@ -804,12 +762,9 @@ def build_message_grammar() -> str:
 
 _SCALE_UNITS: Dict[str, int] = {"兆": 10 ** 12, "億": 10 ** 8, "百万": 10 ** 6, "万": 10 ** 4, "千": 10 ** 3}
 
-
 _SCALE_ALT = "|".join(_SCALE_UNITS)
 
-
 _NUM = r"\d[\d,]*(?:\.\d+)?"
-
 
 _QUANTITY_RE = re.compile(
     rf"((?:{_NUM}\s*(?:{_SCALE_ALT})\s*)*{_NUM}\s*(?:{_SCALE_ALT})?)\s*(円|株)"
@@ -818,12 +773,9 @@ _QUANTITY_RE = re.compile(
 
 _PERCENT_RE = re.compile(rf"({_NUM})\s*(?:%|パーセント)")
 
-
 _PERIOD_RE = re.compile(rf"(?:第)?({_NUM})\s*(?:Q|四半期)")
 
-
 _DATE_RE = re.compile(rf"({_NUM})\s*(年|月|日)")
-
 
 _BARE_RE = re.compile(rf"({_NUM})\s*(倍|ポイント|件|名|人|回|拠点|店)")
 
@@ -1229,7 +1181,6 @@ def message_report() -> None:
 def report() -> None:
     """受入基準の数値と目視用サンプルを出す（03§8）。LLMを読み込まない。"""
     message_report()
-
 
 
 # -----------------------------
